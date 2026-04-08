@@ -2,3 +2,7 @@
 birdclef_env/
 birdclef_combined/submission.csv
 birdclef_combined/logdir/
+
+__pycache__/
+*.pyc
+*.pyo

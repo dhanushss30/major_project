@@ -1,0 +1,42 @@
+# ─── PyTorch (CUDA 12.1) ─────────────────────────────────────────────────────
+# Install with: pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cu121
+# If you don't have a GPU (CPU only), replace the three lines below with:
+#   torch==2.2.2
+#   torchaudio==2.2.2
+#   torchvision==0.17.2
+torch==2.2.2+cu121
+torchaudio==2.2.2+cu121
+torchvision==0.17.2+cu121
+
+# ─── Deep Learning / Model Zoo ────────────────────────────────────────────────
+timm==0.9.16
+lightning==2.2.5
+pytorch-lightning==2.6.1
+torchmetrics==1.9.0
+
+# ─── Audio Processing ─────────────────────────────────────────────────────────
+librosa==0.10.1
+soundfile==0.12.1
+nnAudio==0.3.3
+audioread==3.1.0
+soxr==0.5.0.post1
+
+# ─── Data / Numerics ──────────────────────────────────────────────────────────
+numpy==1.26.4
+pandas==2.2.2
+scipy==1.12.0
+h5py==3.11.0
+numba==0.65.0
+scikit-learn==1.8.0
+
+# ─── Experiment Selection ─────────────────────────────────────────────────────
+optuna
+
+# ─── ONNX Export ──────────────────────────────────────────────────────────────
+onnx==1.21.0
+onnxruntime==1.24.4
+
+# ─── Utilities ────────────────────────────────────────────────────────────────
+tqdm==4.67.3
+matplotlib==3.10.8
+seaborn==0.13.2

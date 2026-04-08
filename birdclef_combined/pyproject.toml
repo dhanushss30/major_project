@@ -1,0 +1,81 @@
+[tool.poetry]
+name = "birdclef-2025-combined"
+version = "1.0.0"
+description = "BirdCLEF+ 2025 Combined 1st & 2nd Place Solution — Multi-Taxonomic Species Identification"
+authors = [
+    "Combined from: Sydorskyi & Gonçalves (2nd), Babych (1st)"
+]
+readme = "README.md"
+python = "^3.10"
+
+[tool.poetry.dependencies]
+python          = "^3.10"
+
+# Deep learning core
+torch           = "^2.2.0"
+torchaudio      = "^2.2.0"
+lightning       = "^2.2.0"
+timm            = "^0.9.16"
+
+# Spectrogram extraction (nnAudio — from 2nd place)
+nnAudio         = "^0.3.3"
+
+# Audio I/O
+soundfile       = "^0.12.1"
+librosa         = "^0.10.1"
+
+# Data
+numpy           = "^1.26.0"
+pandas          = "^2.2.0"
+scipy           = "^1.13.0"
+h5py            = "^3.11.0"       # HDF5 byte-wise access (key 2nd place feature)
+scikit-learn    = "^1.4.0"
+
+# Augmentation
+audiomentations = "^0.36.0"
+
+# Hyperparameter optimization (Optuna ensemble selection — 2nd place §5.7)
+optuna          = "^3.6.0"
+
+# Logging
+wandb           = "^0.17.0"
+
+# Progress
+tqdm            = "^4.66.0"
+rich            = "^13.7.0"
+
+# Export
+onnx            = "^1.16.0"
+onnxruntime     = "^1.18.0"
+openvino        = "^2024.2.0"     # FP16 CPU inference (2nd place Appendix B)
+
+# Data download
+kaggle          = "^1.6.0"
+
+# Utilities
+joblib          = "^1.4.0"
+omegaconf       = "^2.3.0"
+colorednoise    = "^2.2.0"       # Pink/brown noise injection
+
+[tool.poetry.group.dev.dependencies]
+jupyter         = "^1.0.0"
+ipykernel       = "^6.29.0"
+matplotlib      = "^3.8.0"
+seaborn         = "^0.13.0"
+black           = "^24.4.0"
+ruff            = "^0.4.0"
+pre-commit      = "^3.7.0"
+
+[build-system]
+requires      = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+# ─── Notes ────────────────────────────────────────────────────────────────
+# Setup (exact from 2nd place README):
+#   curl -sSL https://install.python-poetry.org | python3 - --version 2.1.3
+#   poetry config virtualenvs.in-project true
+#   eval $(poetry env activate)
+#   poetry install
+#
+# Requirements: Ubuntu 22.04, CUDA 12.4, RTX 4090 (≥10GB VRAM)
+# Disk: ~600GB (more needed for pretraining)

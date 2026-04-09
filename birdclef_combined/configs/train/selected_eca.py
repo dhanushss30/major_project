@@ -72,14 +72,14 @@ config = {
     "grad_clip":    5.0,
 
     # ── Scheduler: cosine, NO warmup (Appendix B) ─────────────────────────
-    "epochs":              20,
+    "epochs":              50,     # Paper uses 50 epochs (was incorrectly set to 20)
     "limit_train_batches": 3000,  # cap steps/epoch: 3000×8=24K samples vs full 183K
 
     # ── Training setup (Appendix B) ───────────────────────────────────────
-    "batch_size":        8,
-    "num_workers":       0,
+    "batch_size":        4,    # Reduced from 8 for 4GB VRAM safety
+    "num_workers":       4,   # Use 4 workers; set to 0 only if Windows multiprocessing errors
     "precision":         "bf16-mixed", # bf16 stable with NFNet; no fp16 overflow
-    "accumulate_grad":   8,   # effective batch = 64 (8×8)
+    "accumulate_grad":   16,  # Increased to 16 to keep effective batch = 64 (4×16=64)
 
     # ── Balanced sampler: γ=-0.5 for NFNet (paper Eq. 1, §5.2) ───────────
     "sampler_gamma":     -0.5,        # SqrtBalancing
@@ -93,6 +93,31 @@ config = {
     # Background noise paths (set to actual paths)
     "bg_soundscape_paths": [],   # Prior-year soundscape paths
     "bg_esc50_paths":      [],   # ESC-50 audio paths
+
+    # ── NOVEL #1: DANN Domain Adaptation ─────────────────────────────────
+    "use_dann":          True,
+    "dann_lambda_max":   0.3,
+    "dann_hidden_dim":   512,
+
+    # ── NOVEL #4: Prototypical Head for Rare Species ───────────────────
+    # Set use_prototypical: True to enable contrastive prototype training.
+    # After training, run build_prototypes.py to compute better prototypes.
+    # Then set prototypes_path and class_counts_path for inference.
+    "use_prototypical":    True,
+    "proto_temperature":   0.05,   # Cosine similarity temperature
+    "proto_margin":        0.3,    # Push margin for negative prototype pairs
+    "proto_rare_thr":      0.2,    # Min rarity weight to include in proto loss
+    "proto_loss_weight":   0.3,    # Weight of proto loss vs main BCE/Focal
+    "proto_half_life":     50,     # Class count where w_c = max_weight/e
+    "proto_max_weight":    0.75,   # Max prototype blend weight (rarest class)
+    "prototypes_path":     None,   # Set to .pt file after build_prototypes.py
+    "class_counts_path":   None,   # Set to .pt file after build_prototypes.py
+
+    # ── NOVEL #5: Soundscape Noise-Conditioned Features (FiLM) ────────
+    # Adapts classifier features using Long-Term Average Spectrum of soundscape.
+    # Requires soundscape_root to be set (uses same buffer as DANN).
+    "use_noise_conditioning": True,
+    "noise_dim":              128,   # Noise descriptor embedding dimension
 
     # ── Pseudo-label config (Stage 2) ─────────────────────────────────────
     "labeled_fraction":    0.5,   # 50% labeled, 50% pseudo (Figure 4)

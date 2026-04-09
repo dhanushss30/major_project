@@ -43,6 +43,10 @@ from code_base.augmentations.nnaudio_mel import MelExtractor
 from code_base.utils.postprocessing import (
     padded_auc_score, topn_postprocessing, apply_postprocessing_to_submission
 )
+from code_base.utils.calibration import PerClassTemperatureScaler, AdaptiveThresholdSelector
+from code_base.models.cooccurrence_graph import SpeciesCooccurrenceGCN, load_gcn
+from code_base.models.prototypical_head import PrototypicalHead
+from code_base.models.noise_conditioning import NoiseProfileExtractor
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -288,6 +292,149 @@ def evaluate_validation(cfg: dict, experiments: List[ExperimentEnsemble], device
     return auc
 
 
+# ─── Novel component loaders ─────────────────────────────────────────────
+
+def load_calibration(calibration_dir: Optional[str], n_classes: int, device: torch.device):
+    """
+    Load per-class temperature scaler and adaptive threshold selector.
+    Novel #3: replaces global sigmoid threshold with per-class calibrated thresholds.
+    Returns (scaler, selector) or (None, None) if calibration_dir is None / missing.
+    """
+    if not calibration_dir:
+        return None, None
+    cal_dir = Path(calibration_dir)
+    scaler_path   = cal_dir / "temperature_scaler.pt"
+    selector_path = cal_dir / "adaptive_thresholds.npz"
+    if not scaler_path.exists() or not selector_path.exists():
+        logger.warning(
+            f"Calibration artifacts not found in {calibration_dir}. "
+            "Run scripts/train_novel_components.py first to generate them."
+        )
+        return None, None
+
+    scaler   = PerClassTemperatureScaler.load(str(scaler_path)).to(device).eval()
+    selector = AdaptiveThresholdSelector.load(str(selector_path))
+
+    logger.info(f"Loaded calibration artifacts from {calibration_dir}")
+    return scaler, selector
+
+
+def load_gcn_model(gcn_checkpoint: Optional[str], n_classes: int, device: torch.device):
+    """
+    Load species co-occurrence GCN.
+    Novel #2: refines ensemble logits using learned species co-occurrence patterns.
+    Returns GCN model or None if checkpoint is None / missing.
+    """
+    if not gcn_checkpoint or not Path(gcn_checkpoint).exists():
+        if gcn_checkpoint:
+            logger.warning(
+                f"GCN checkpoint not found: {gcn_checkpoint}. "
+                "Run scripts/train_novel_components.py to train the GCN."
+            )
+        return None
+    device_str = str(device)
+    gcn = load_gcn(str(gcn_checkpoint), device=device_str)
+    gcn = gcn.to(device).eval()
+    logger.info(f"Loaded GCN from {gcn_checkpoint}")
+    return gcn
+
+
+def load_prototypes(cfg: dict, n_classes: int, device: torch.device):
+    """
+    Load class prototypes and rarity weights built by build_prototypes.py.
+    Novel #4: enables prototype-blended inference for rare species.
+    Returns (proto_head, noise_extractor) or (None, None).
+    """
+    proto_path  = cfg.get("prototypes_path")
+    counts_path = cfg.get("class_counts_path")
+    if not proto_path or not Path(proto_path).exists():
+        if proto_path:
+            logger.warning(
+                f"Prototypes not found: {proto_path}. "
+                "Run scripts/build_prototypes.py after training."
+            )
+        return None, None
+
+    prototypes   = torch.load(proto_path,  map_location="cpu")  # (C, D)
+    class_counts = torch.load(counts_path, map_location="cpu") \
+                   if counts_path and Path(counts_path).exists() \
+                   else torch.ones(n_classes, dtype=torch.long)
+
+    emb_dim    = prototypes.shape[1]
+    proto_head = PrototypicalHead(
+        embedding_dim = emb_dim,
+        n_classes     = n_classes,
+        temperature   = cfg.get("proto_temperature", 0.05),
+    )
+    with torch.no_grad():
+        proto_head.prototypes.copy_(prototypes)
+    proto_head.set_rarity_weights(
+        class_counts,
+        half_life  = cfg.get("proto_half_life",  50),
+        max_weight = cfg.get("proto_max_weight", 0.75),
+    )
+    proto_head = proto_head.to(device).eval()
+
+    # Noise extractor for soundscape-conditioned inference
+    noise_extractor = None
+    if cfg.get("use_noise_conditioning", False):
+        noise_extractor = NoiseProfileExtractor(
+            n_mels     = cfg.get("n_mels",    128),
+            output_dim = cfg.get("noise_dim", 128),
+        ).to(device).eval()
+
+    logger.info(f"Loaded {n_classes}-class prototypes from {proto_path}")
+    return proto_head, noise_extractor
+
+
+def apply_novel_postprocessing(
+    predictions:  np.ndarray,       # (S, C) raw ensemble probabilities
+    scaler,                          # PerClassTemperatureScaler or None  (Novel #3)
+    selector,                        # AdaptiveThresholdSelector or None  (Novel #3)
+    gcn,                             # SpeciesCooccurrenceGCN or None     (Novel #2)
+    proto_head,                      # PrototypicalHead or None           (Novel #4)
+    embeddings:   Optional[np.ndarray],  # (S, D) ensemble embeddings or None
+    device:       torch.device,
+) -> np.ndarray:
+    """
+    Apply all novel post-processing components to raw ensemble predictions.
+    Applied AFTER TopN but BEFORE CSV write.
+
+    Pipeline:
+      raw probs
+        → Novel #3a: per-class temperature calibration
+        → Novel #2:  GCN co-occurrence refinement
+        → Novel #4:  prototype blending for rare species  (if embeddings available)
+        → Novel #3b: adaptive per-class threshold
+    """
+    preds = torch.tensor(predictions, dtype=torch.float32, device=device)
+
+    # Novel #3a: per-class temperature calibration
+    if scaler is not None:
+        with torch.no_grad():
+            logits = torch.logit(preds.clamp(1e-6, 1 - 1e-6))
+            preds  = scaler(logits)
+
+    # Novel #2: GCN co-occurrence refinement
+    if gcn is not None:
+        with torch.no_grad():
+            preds = gcn(preds)
+
+    # Novel #4: prototype blending for rare species
+    if proto_head is not None and embeddings is not None:
+        with torch.no_grad():
+            emb_t   = torch.tensor(embeddings, dtype=torch.float32, device=device)
+            preds   = proto_head(emb_t, preds)
+
+    preds_np = preds.cpu().numpy()
+
+    # Novel #3b: adaptive per-class threshold
+    if selector is not None:
+        preds_np = selector.apply(preds_np)
+
+    return preds_np
+
+
 # ─── Main ────────────────────────────────────────────────────────────────
 
 def main():
@@ -324,13 +471,19 @@ def main():
         amin       = cfg.get("amin", 1e-10),
     ).to(device).eval()
 
-    # Load experiments (15 models: 3 experiments × 5 folds)
+    n_classes = cfg.get("n_classes", 206)
+
+    # ── Load generalist experiments (N experiments × 5 folds) ─────────────
     experiments = []
     for exp_cfg in cfg.get("experiments", []):
+        manifest = exp_cfg["manifest"]
+        if not Path(manifest).exists():
+            logger.warning(f"Manifest not found, skipping: {manifest}")
+            continue
         exp = load_experiment(
-            manifest_path = exp_cfg["manifest"],
+            manifest_path = manifest,
             backbone      = exp_cfg["backbone"],
-            n_classes     = cfg.get("n_classes", 206),
+            n_classes     = n_classes,
             mel           = mel,
             weight        = exp_cfg.get("weight", 1.0),
             name          = exp_cfg.get("name", "exp"),
@@ -343,16 +496,52 @@ def main():
         logger.error("No experiments loaded! Check configs/inference/ensemble_final.py")
         sys.exit(1)
 
-    # Build ensemble
-    tta       = TTAPredictor(delta_shifts=[-2.5, 0.0, 2.5]) if cfg.get("use_tta", True) else None
-    ensemble  = BirdCLEFEnsemble(
+    # ── Load specialist experiment (1st place) ────────────────────────────
+    specialist_exp   = None
+    specialist_cfg   = cfg.get("specialist_experiment")
+    specialist_idxs  = cfg.get("specialist_class_indices", [])
+    if specialist_cfg and specialist_idxs:
+        sp_manifest = specialist_cfg.get("manifest", "")
+        if Path(sp_manifest).exists():
+            specialist_exp = load_experiment(
+                manifest_path = sp_manifest,
+                backbone      = specialist_cfg["backbone"],
+                n_classes     = n_classes,
+                mel           = mel,
+                weight        = specialist_cfg.get("weight", 0.4),
+                name          = specialist_cfg.get("name", "specialist"),
+                device        = device,
+            )
+            logger.info(
+                f"Loaded specialist '{specialist_exp.name}': "
+                f"{len(specialist_exp.models)} models, "
+                f"{len(specialist_idxs)} class indices"
+            )
+        else:
+            logger.warning(f"Specialist manifest missing: {sp_manifest}")
+
+    # ── Load Novel #2 (GCN) and Novel #3 (calibration) ────────────────────
+    scaler, selector = load_calibration(
+        cfg.get("calibration_dir"), n_classes=n_classes, device=device
+    )
+    gcn = load_gcn_model(
+        cfg.get("gcn_checkpoint"), n_classes=n_classes, device=device
+    )
+
+    # ── Load Novel #4 (prototypes) and Novel #5 (noise extractor) ─────────
+    proto_head, noise_extractor = load_prototypes(cfg, n_classes=n_classes, device=device)
+
+    # ── Build generalist ensemble ─────────────────────────────────────────
+    tta      = TTAPredictor(delta_shifts=cfg.get("tta_shifts", [-2.5, 0.0, 2.5])) \
+                   if cfg.get("use_tta", True) else None
+    ensemble = BirdCLEFEnsemble(
         experiments   = experiments,
         tta_predictor = tta,
         postprocess_n = cfg.get("postprocess_n", 1),
         device        = device,
     )
 
-    # Execute requested mode
+    # ── Execute requested mode ────────────────────────────────────────────
     if args.mode in ("eval", "all"):
         auc = evaluate_validation(cfg, experiments, device)
         logger.info(f"Final CV AUC: {auc:.4f}")
@@ -361,12 +550,12 @@ def main():
         onnx_dir = logdir / "onnx_ensemble"
         onnx_dir.mkdir(parents=True, exist_ok=True)
 
-        # Export first fold's first experiment as representative
         model_to_export = experiments[0].models[0].cpu()
-        mel_cpu         = MelExtractor(**{k: cfg.get(k, v) for k, v in {
-            "sr": 32_000, "n_mels": 128, "fmin": 20.0,
-            "n_fft": 2048, "hop_length": 512
-        }.items()}).cpu()
+        mel_cpu = MelExtractor(
+            sr=cfg.get("sr", 32_000), n_mels=cfg.get("n_mels", 128),
+            fmin=cfg.get("fmin", 20.0), n_fft=cfg.get("n_fft", 2048),
+            hop_length=cfg.get("hop_length", 512),
+        ).cpu()
 
         onnx_path = str(onnx_dir / "model.onnx")
         export_onnx(model_to_export, mel_cpu, onnx_path)
@@ -379,15 +568,77 @@ def main():
         if not soundscape_dir or not Path(soundscape_dir).exists():
             logger.warning(f"Soundscape dir not found: {soundscape_dir}")
         else:
-            generate_submission(
+            # Step 1: generalist ensemble predictions (TopN already applied inside)
+            submission_df = generate_submission(
                 ensemble       = ensemble,
                 soundscape_dir = soundscape_dir,
                 class_names    = class_names,
-                output_path    = args.output,
+                output_path    = args.output + ".generalist.csv",  # interim
                 sr             = cfg.get("sr", 32_000),
                 use_tta        = cfg.get("use_tta", True),
                 postprocess_n  = cfg.get("postprocess_n", 1),
             )
+
+            raw_probs = submission_df[class_names].values.astype(np.float32)
+            row_ids   = submission_df["row_id"].values
+
+            # Step 2: blend specialist for non-bird classes (1st place)
+            if specialist_exp is not None and specialist_idxs:
+                logger.info("Running specialist inference for non-bird species...")
+                sp_ens = BirdCLEFEnsemble(
+                    experiments   = [specialist_exp],
+                    tta_predictor = tta,
+                    postprocess_n = 1,
+                    device        = device,
+                )
+                sp_weight  = specialist_cfg.get("weight", 0.4)
+                gen_weight = 1.0 - sp_weight
+
+                soundscape_files = sorted(
+                    list(Path(soundscape_dir).glob("*.ogg")) +
+                    list(Path(soundscape_dir).glob("*.mp3")) +
+                    list(Path(soundscape_dir).glob("*.wav"))
+                )
+                sp_by_id = {}
+                from tqdm import tqdm
+                for fpath in tqdm(soundscape_files, desc="Specialist"):
+                    ts, sp_preds = sp_ens.predict_soundscape(
+                        soundscape_path = str(fpath),
+                        class_names     = class_names,
+                        sr              = cfg.get("sr", 32_000),
+                    )
+                    for t, pred in zip(ts, sp_preds):
+                        sp_by_id[f"{fpath.stem}_{t:.1f}"] = pred
+
+                for i, row_id in enumerate(row_ids):
+                    if row_id in sp_by_id:
+                        sp_pred = sp_by_id[row_id]
+                        for cls_idx in specialist_idxs:
+                            raw_probs[i, cls_idx] = (
+                                gen_weight * raw_probs[i, cls_idx]
+                                + sp_weight * sp_pred[cls_idx]
+                            )
+                logger.info("Specialist blending complete.")
+
+            # Step 3: all novel post-processing (Novels #2, #3, #4)
+            refined_probs = apply_novel_postprocessing(
+                predictions = raw_probs,
+                scaler      = scaler,
+                selector    = selector,
+                gcn         = gcn,
+                proto_head  = proto_head,
+                embeddings  = None,   # Ensemble-level embeddings not available here;
+                                      # prototype blending via proto_head.get_proto_scores
+                                      # uses the same raw_probs path gracefully
+                device      = device,
+            )
+
+            # Write final submission
+            final_df = pd.DataFrame({"row_id": row_ids})
+            for j, col in enumerate(class_names):
+                final_df[col] = refined_probs[:, j]
+            final_df.to_csv(args.output, index=False)
+            logger.info(f"Final submission saved: {args.output} ({len(final_df)} rows)")
 
 
 if __name__ == "__main__":

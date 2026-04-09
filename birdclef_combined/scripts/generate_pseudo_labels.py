@@ -110,7 +110,8 @@ def main():
     p.add_argument("--mode",                choices=["full", "oof"], default="full")
     p.add_argument("--n_folds",             type=int,   default=5)
     p.add_argument("--batch_size",          type=int,   default=64)
-    p.add_argument("--num_workers",         type=int,   default=4)
+    p.add_argument("--num_workers",         type=int,   default=0,
+                   help="0 is safest on Windows; use 2-4 on Linux")
     p.add_argument("--sr",                  type=int,   default=32_000)
     args = p.parse_args()
 

@@ -213,12 +213,9 @@ class PseudoLabelGenerator:
             f"({100*n_kept/max(len(keep_mask),1):.1f}%)"
         )
 
-        # Collect metadata from dataset
-        filenames  = []
-        start_secs = []
-        for item in self.ds:
-            filenames.append(item["filename"])
-            start_secs.append(float(item["start_sec"]))
+        # Collect metadata directly from dataset index (no audio loading)
+        filenames  = [str(fpath.name)    for fpath, _, _       in self.ds.index]
+        start_secs = [float(start_sec)   for _,     _, start_sec in self.ds.index]
 
         # Build DataFrame
         idx_arr = np.where(keep_mask)[0]
@@ -263,10 +260,10 @@ class PseudoLabelGenerator:
         """
         logger.info(f"OOF pseudo-label generation (iteration {iteration})")
 
-        # Collect all chunk metadata first
-        all_filenames  = [item["filename"]  for item in self.ds]
-        all_start_secs = [float(item["start_sec"]) for item in self.ds]
-        all_file_folds = [int(item["file_fold"]) for item in self.ds]
+        # Collect all chunk metadata directly from index (no audio loading)
+        all_filenames  = [str(fpath.name)   for fpath, fold, _     in self.ds.index]
+        all_start_secs = [float(start_sec)  for _,     _,    start_sec in self.ds.index]
+        all_file_folds = [int(fold)         for _,     fold, _     in self.ds.index]
 
         n_total = len(all_filenames)
         ensemble_probs = np.zeros((n_total, self.n_classes), dtype=np.float32)

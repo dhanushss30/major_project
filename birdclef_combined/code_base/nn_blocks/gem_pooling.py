@@ -101,6 +101,23 @@ class ClassificationHead(nn.Module):
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)
 
+    def get_embedding(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Returns the 512-dim hidden embedding (after first Linear+ReLU, before classifier).
+        Used by PrototypicalHead and build_prototypes.py.
+
+        Args:
+            x : (B, in_features)
+        Returns:
+            (B, hidden_dim)
+        """
+        # head = [Dropout, Linear, ReLU, Dropout, Linear]
+        # indices 0-2 = Dropout → Linear → ReLU
+        h = x
+        for layer in list(self.head.children())[:3]:
+            h = layer(h)
+        return h
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Args:

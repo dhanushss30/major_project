@@ -240,7 +240,7 @@ class RandomFiltering(nn.Module):
                 band_gains[b, 0, f_start:f_end, 0] = gain
 
         # Smooth between bands using linear interpolation
-        band_gains = F_.interpolate(
+        band_gains = torch.nn.functional.interpolate(
             band_gains.squeeze(1).squeeze(-1).unsqueeze(0),  # (1, B, F)
             size=F, mode="linear", align_corners=False
         ).squeeze(0).unsqueeze(1).unsqueeze(-1)              # (B, 1, F, 1)
@@ -248,9 +248,6 @@ class RandomFiltering(nn.Module):
         spec = spec * band_gains
         return torch.clamp(spec, 0.0, 1.0)
 
-
-# Alias for import convenience
-import torch.nn.functional as F_
 
 
 # ─── SpecAugment (time + frequency masking) ────────────────────────────────

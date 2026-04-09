@@ -27,8 +27,14 @@ except ImportError:
     import pytorch_lightning as L
 
 from .backbone import BirdCLEFModel
+from .domain_adaptation import (
+    DomainClassifier, DomainAdaptationLoss,
+    SoundscapeAudioBuffer, compute_dann_lambda,
+)
+from .prototypical_head import PrototypicalHead, PrototypicalLoss
+from .noise_conditioning import NoiseProfileExtractor
 from ..augmentations.nnaudio_mel import MelExtractor
-from ..augmentations.audio_aug import AudioMixUp, SpectrogramAugmenter
+from ..augmentations.audio_aug import AudioMixUp, BackgroundNoiseMixer, SpectrogramAugmenter
 from ..losses.focal_bce import CombinedLoss
 from ..utils.postprocessing import padded_auc_score
 
@@ -56,15 +62,17 @@ class BirdCLEFModule(L.LightningModule):
 
         # Build model
         self.model = BirdCLEFModel(
-            backbone_name   = cfg["backbone"],
-            n_classes       = cfg.get("n_classes", 206),
-            pretrained      = cfg.get("pretrained", True),
-            pretrained_path = cfg.get("pretrained_path", None),
-            hidden_dim      = cfg.get("hidden_dim", 512),
-            dropout1        = cfg.get("dropout1", 0.25),
-            dropout2        = cfg.get("dropout2", 0.5),
-            gem_p           = cfg.get("gem_p", 3.0),
-            use_sed_head    = cfg.get("use_sed_head", False),
+            backbone_name          = cfg["backbone"],
+            n_classes              = cfg.get("n_classes", 206),
+            pretrained             = cfg.get("pretrained", True),
+            pretrained_path        = cfg.get("pretrained_path", None),
+            hidden_dim             = cfg.get("hidden_dim", 512),
+            dropout1               = cfg.get("dropout1", 0.25),
+            dropout2               = cfg.get("dropout2", 0.5),
+            gem_p                  = cfg.get("gem_p", 3.0),
+            use_sed_head           = cfg.get("use_sed_head", False),
+            use_noise_conditioning = cfg.get("use_noise_conditioning", False),  # Novel #5
+            noise_dim              = cfg.get("noise_dim", 128),
         )
 
         # Mel extractor (nnAudio, on GPU)
@@ -85,6 +93,19 @@ class BirdCLEFModule(L.LightningModule):
             scale = cfg.get("mixup_scale", 0.5),
         )
 
+        # Background noise augmentation (paper §5.2, p=0.5)
+        bg_soundscape = cfg.get("bg_soundscape_paths", [])
+        bg_esc50      = cfg.get("bg_esc50_paths", [])
+        if bg_soundscape or bg_esc50:
+            self.bg_noise = BackgroundNoiseMixer(
+                soundscape_paths = bg_soundscape,
+                esc50_paths      = bg_esc50,
+                sample_rate      = cfg.get("sr", 32_000),
+                p                = 0.5,
+            )
+        else:
+            self.bg_noise = None
+
         # Spectrogram-domain augmentations
         heavy = cfg.get("stage", "supervised") == "noisy_student"
         self.spec_aug = SpectrogramAugmenter(
@@ -101,6 +122,83 @@ class BirdCLEFModule(L.LightningModule):
             focal_gamma   = cfg.get("focal_gamma",  2.0),
         )
 
+        # ── NOVEL: DANN Domain Adaptation (Contribution #1) ───────────────
+        # Enabled when "soundscape_root" is set and "use_dann" is True
+        self.use_dann      = cfg.get("use_dann", False)
+        self.dann_lambda   = cfg.get("dann_lambda_max", 0.3)
+        self._dann_buffer  = None
+        self._domain_clf   = None
+        self._domain_loss  = None
+
+        if self.use_dann and cfg.get("soundscape_root"):
+            # Auto-detect feature dim from the backbone registry
+            from .backbone import BACKBONE_REGISTRY
+            feat_dim = BACKBONE_REGISTRY.get(cfg["backbone"], (None, 1280))[1]
+
+            self._domain_clf  = DomainClassifier(
+                in_features = feat_dim,
+                hidden_dim  = cfg.get("dann_hidden_dim", 512),
+            )
+            self._domain_loss = DomainAdaptationLoss()
+
+            try:
+                self._dann_buffer = SoundscapeAudioBuffer(
+                    soundscape_dir = cfg["soundscape_root"],
+                    sr             = cfg.get("sr", 32_000),
+                    chunk_duration = cfg.get("chunk_duration", 5.0),
+                )
+                logger.info("DANN domain adaptation: ENABLED "
+                           f"(lambda_max={self.dann_lambda})")
+            except FileNotFoundError as e:
+                logger.warning(f"DANN disabled — soundscape dir error: {e}")
+                self.use_dann     = False
+                self._domain_clf  = None
+                self._domain_loss = None
+        # ─────────────────────────────────────────────────────────────────
+
+        # ── NOVEL #4: Prototypical Head for Rare Species ──────────────────
+        # Enabled when "use_prototypical" is True.
+        # Requires class_counts_path pointing to a saved numpy array of shape (C,)
+        # Built automatically by main_train.py from the dataset after fold split.
+        self.use_prototypical  = cfg.get("use_prototypical", False)
+        self._proto_head       = None
+        self._proto_loss_fn    = None
+
+        if self.use_prototypical:
+            hidden_dim = cfg.get("hidden_dim", 512)
+            n_classes  = cfg.get("n_classes", 206)
+            self._proto_head    = PrototypicalHead(
+                embedding_dim = hidden_dim,
+                n_classes     = n_classes,
+                temperature   = cfg.get("proto_temperature", 0.05),
+            )
+            self._proto_loss_fn = PrototypicalLoss(
+                margin         = cfg.get("proto_margin",    0.3),
+                rare_threshold = cfg.get("proto_rare_thr",  0.2),
+                weight         = cfg.get("proto_loss_weight", 0.3),
+            )
+            logger.info("Prototypical head: ENABLED "
+                       f"(temperature={cfg.get('proto_temperature', 0.05)}, "
+                       f"loss_weight={cfg.get('proto_loss_weight', 0.3)})")
+        # ─────────────────────────────────────────────────────────────────
+
+        # ── NOVEL #5: Noise-Conditioned Feature Adaptation ────────────────
+        # Enabled when "use_noise_conditioning" is True.
+        # NoiseProfileExtractor runs on soundscape audio from the DANN buffer.
+        # If DANN buffer is absent, zeros are used (identity = no conditioning).
+        self.use_noise_conditioning = cfg.get("use_noise_conditioning", False)
+        self._noise_extractor       = None
+
+        if self.use_noise_conditioning:
+            self._noise_extractor = NoiseProfileExtractor(
+                n_mels     = cfg.get("n_mels",    128),
+                output_dim = cfg.get("noise_dim", 128),
+            )
+            logger.info(
+                f"Noise conditioning: ENABLED (noise_dim={cfg.get('noise_dim', 128)})"
+            )
+        # ─────────────────────────────────────────────────────────────────
+
         # EMA
         self.use_ema    = cfg.get("use_ema", True)
         self.ema_decay  = cfg.get("ema_decay", 0.999)
@@ -109,6 +207,23 @@ class BirdCLEFModule(L.LightningModule):
         # Validation cache
         self._val_probs:   List[np.ndarray] = []
         self._val_targets: List[np.ndarray] = []
+
+    # ── Prototype rarity initialisation ──────────────────────────────────
+
+    def set_class_counts(self, class_counts: torch.Tensor):
+        """
+        Call this from main_train.py after building the dataset, passing
+        the per-class training sample counts so rarity weights are correct.
+
+        Args:
+            class_counts : (C,) int tensor of per-class clip counts
+        """
+        if self._proto_head is not None:
+            self._proto_head.set_rarity_weights(
+                class_counts,
+                half_life  = self.cfg.get("proto_half_life",  50),
+                max_weight = self.cfg.get("proto_max_weight", 0.75),
+            )
 
     # ── EMA ───────────────────────────────────────────────────────────────
 
@@ -141,23 +256,33 @@ class BirdCLEFModule(L.LightningModule):
         audio  = batch["audio"]      # (B, T)
         labels = batch["label"]      # (B, C)
 
-        # MixUp in audio domain (50% probability, applied batch-wise)
-        if self.mixup.p > 0 and torch.rand(1).item() < self.mixup.p:
-            perm      = torch.randperm(audio.size(0), device=audio.device)
-            audio2    = audio[perm]
-            labels2   = labels[perm]
+        # MixUp in audio domain (50% probability per sample, vectorized)
+        if self.mixup.p > 0:
+            perm   = torch.randperm(audio.size(0), device=audio.device)
+            audio2 = audio[perm]
+            labels2 = labels[perm]
 
-            # Mix in numpy (AudioMixUp operates on numpy arrays)
-            mixed_audio_list  = []
-            mixed_label_list  = []
-            for i in range(audio.size(0)):
-                a, l = self.mixup(
-                    audio[i].cpu().numpy(),  labels[i].cpu().numpy(),
-                    audio2[i].cpu().numpy(), labels2[i].cpu().numpy(),
-                )
+            # Vectorized: decide per-sample whether to mix
+            do_mix = torch.rand(audio.size(0)) < self.mixup.p  # (B,) bool
+            if do_mix.any():
+                mixed_audio  = audio.clone()
+                mixed_labels = labels.clone()
+                idx = do_mix.nonzero(as_tuple=True)[0]
+                mixed_audio[idx]  = (audio[idx] + self.mixup.scale * audio2[idx]).clamp(-1.0, 1.0)
+                mixed_labels[idx] = (labels[idx] + labels2[idx]).clamp(0.0, 1.0)
+                audio  = mixed_audio
+                labels = mixed_labels
+
+        # Background noise augmentation (audio domain, before mel)
+        if self.bg_noise is not None and self.training:
+            audio_np = audio.cpu().numpy()
+            labels_np = labels.cpu().numpy()
+            mixed_audio_list = []
+            mixed_label_list = []
+            for i in range(audio_np.shape[0]):
+                a, l = self.bg_noise(audio_np[i], labels_np[i])
                 mixed_audio_list.append(a)
                 mixed_label_list.append(l)
-
             audio  = torch.tensor(np.stack(mixed_audio_list), device=audio.device)
             labels = torch.tensor(np.stack(mixed_label_list), device=labels.device)
 
@@ -168,11 +293,85 @@ class BirdCLEFModule(L.LightningModule):
         self.spec_aug.train()
         mel = self.spec_aug(mel)
 
-        # Forward
-        logits = self.model.get_logits(mel)
+        # ── NOVEL #5: Noise profile from soundscape buffer ────────────────
+        noise_profile = None
+        if self.use_noise_conditioning and self._noise_extractor is not None:
+            if self._dann_buffer is not None:
+                sc_audio_noise = self._dann_buffer.sample(audio.size(0), audio.device)
+                sc_mel_noise   = self.mel(sc_audio_noise)                  # (B, 1, n_mels, T')
+                with torch.no_grad():
+                    noise_profile = self._noise_extractor(sc_mel_noise)    # (B, noise_dim)
+            else:
+                # No soundscape buffer: use zeros (identity FiLM — no conditioning)
+                noise_profile = torch.zeros(
+                    audio.size(0), self.cfg.get("noise_dim", 128), device=audio.device
+                )
+        # ─────────────────────────────────────────────────────────────────
 
-        # Loss
+        # Forward — extract features for species head, DANN, and prototypes
+        features = self.model.extract_features(mel)                        # (B, feat_dim)
+
+        # Pass noise profile to head (NoisyConditionedHead uses it; others ignore it)
+        if self.use_noise_conditioning:
+            logits = self.model.head(features, noise_profile)             # (B, n_classes)
+        else:
+            logits = self.model.head(features)                            # (B, n_classes)
+
+        # Species classification loss (BCE + Focal + optional SoftAUC)
         loss = self.loss_fn(logits, labels)
+
+        # ── NOVEL: DANN Domain Adaptation (Contribution #1) ───────────────
+        if self.use_dann and self._domain_clf is not None and self._dann_buffer is not None:
+            # Compute current DANN λ based on training progress
+            total_steps   = self.trainer.estimated_stepping_batches
+            current_step  = self.global_step
+            p             = min(current_step / max(total_steps, 1), 1.0)
+            dann_lambda   = compute_dann_lambda(p, max_lambda=self.dann_lambda)
+            self._domain_clf.set_lambda(dann_lambda)
+
+            # Sample unlabeled soundscape audio (no labels needed)
+            sc_audio    = self._dann_buffer.sample(audio.size(0), audio.device)
+            sc_mel      = self.mel(sc_audio)                     # (B, 1, n_mels, T')
+            sc_features = self.model.extract_features(sc_mel)    # (B, feat_dim)
+
+            # Domain predictions (gradient reversal is inside DomainClassifier)
+            dom_logits_xc = self._domain_clf(features)           # (B, 1) — label=0 (XC)
+            dom_logits_sc = self._domain_clf(sc_features)        # (B, 1) — label=1 (soundscape)
+
+            domain_loss = self._domain_loss(dom_logits_xc, dom_logits_sc)
+            loss = loss + dann_lambda * domain_loss
+
+            if batch_idx % 100 == 0:
+                self.log("train/domain_loss", domain_loss,
+                         on_step=True, prog_bar=False)
+                self.log("train/dann_lambda", dann_lambda,
+                         on_step=True, prog_bar=False)
+        # ─────────────────────────────────────────────────────────────────
+
+        # ── NOVEL #4: Prototypical loss for rare species ──────────────────
+        if self.use_prototypical and self._proto_head is not None:
+            # Get 512-dim embeddings from the head
+            if self.use_noise_conditioning and hasattr(self.model.head, "get_embedding"):
+                embeddings = self.model.head.get_embedding(features, noise_profile)
+            elif hasattr(self.model.head, "get_embedding"):
+                embeddings = self.model.head.get_embedding(features)
+            else:
+                embeddings = None
+
+            if embeddings is not None:
+                proto_loss = self._proto_loss_fn(
+                    embeddings     = embeddings,
+                    labels         = labels,
+                    prototypes     = self._proto_head.prototypes,
+                    rarity_weights = self._proto_head.rarity_weights,
+                    temperature    = self._proto_head.temperature,
+                )
+                loss = loss + proto_loss
+
+                if batch_idx % 100 == 0:
+                    self.log("train/proto_loss", proto_loss,
+                             on_step=True, prog_bar=False)
+        # ─────────────────────────────────────────────────────────────────
 
         # EMA update
         if batch_idx % 5 == 0:
@@ -234,15 +433,38 @@ class BirdCLEFModule(L.LightningModule):
         min_lr       = self.cfg.get("min_lr", 1e-6)
         weight_decay = self.cfg.get("weight_decay", 1e-4)
 
+        # Collect parameters: main model + all novel components
+        param_groups = [{"params": self.model.parameters(), "lr": lr}]
+
+        if self.use_dann and self._domain_clf is not None:
+            # Domain classifier learns faster than backbone
+            param_groups.append(
+                {"params": self._domain_clf.parameters(), "lr": lr * 3.0}
+            )
+
+        if self.use_prototypical and self._proto_head is not None:
+            # Prototypes + prototype head at same LR as main model
+            param_groups.append(
+                {"params": self._proto_head.parameters(), "lr": lr}
+            )
+
+        if self.use_noise_conditioning and self._noise_extractor is not None:
+            # Noise extractor MLP at standard LR
+            param_groups.append(
+                {"params": self._noise_extractor.parameters(), "lr": lr}
+            )
+
+        params = param_groups if len(param_groups) > 1 else list(self.model.parameters())
+
         if "nfnet" in backbone:
             optimizer = torch.optim.RAdam(
-                self.model.parameters(),
+                params,
                 lr           = lr,
                 weight_decay = weight_decay,
             )
         else:
             optimizer = torch.optim.AdamW(
-                self.model.parameters(),
+                params,
                 lr           = lr,
                 eps          = 1e-8,
                 betas        = (0.9, 0.999),

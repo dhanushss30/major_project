@@ -28,6 +28,7 @@ import torch
 import torch.nn as nn
 
 from ..nn_blocks.gem_pooling import GeMPooling, ClassificationHead, SEDHead
+from .noise_conditioning import NoisyConditionedHead, NoiseProfileExtractor
 
 logger = logging.getLogger(__name__)
 
@@ -108,22 +109,25 @@ class BirdCLEFModel(nn.Module):
 
     def __init__(
         self,
-        backbone_name:    str           = "eca_nfnet_l0",
-        n_classes:        int           = 206,
-        pretrained:       bool          = True,
-        pretrained_path:  Optional[str] = None,
-        in_chans:         int           = 1,
-        hidden_dim:       int           = 512,
-        dropout1:         float         = 0.25,
-        dropout2:         float         = 0.5,
-        gem_p:            float         = 3.0,
-        use_sed_head:     bool          = False,
+        backbone_name:         str           = "eca_nfnet_l0",
+        n_classes:             int           = 206,
+        pretrained:            bool          = True,
+        pretrained_path:       Optional[str] = None,
+        in_chans:              int           = 1,
+        hidden_dim:            int           = 512,
+        dropout1:              float         = 0.25,
+        dropout2:              float         = 0.5,
+        gem_p:                 float         = 3.0,
+        use_sed_head:          bool          = False,
+        use_noise_conditioning: bool         = False,   # Novel #5
+        noise_dim:             int           = 128,     # Novel #5
     ):
         super().__init__()
 
-        self.backbone_name = backbone_name
-        self.n_classes     = n_classes
-        self.use_sed_head  = use_sed_head
+        self.backbone_name          = backbone_name
+        self.n_classes              = n_classes
+        self.use_sed_head           = use_sed_head
+        self.use_noise_conditioning = use_noise_conditioning
 
         # Backbone
         self.backbone = create_timm_backbone(
@@ -145,7 +149,7 @@ class BirdCLEFModel(nn.Module):
                 feat_dim = dummy_feat.shape[-1]
         logger.info(f"Auto-detected feature dim: {feat_dim}")
 
-        # Classification head
+        # Classification head — Novel #5 replaces standard head when enabled
         if use_sed_head:
             self.head = SEDHead(
                 in_features = feat_dim,
@@ -153,6 +157,17 @@ class BirdCLEFModel(nn.Module):
                 hidden_dim  = hidden_dim,
                 dropout     = dropout1,
             )
+        elif use_noise_conditioning:
+            # Novel #5: FiLM-conditioned head
+            self.head = NoisyConditionedHead(
+                in_features = feat_dim,
+                n_classes   = n_classes,
+                hidden_dim  = hidden_dim,
+                noise_dim   = noise_dim,
+                dropout1    = dropout1,
+                dropout2    = dropout2,
+            )
+            logger.info(f"NoisyConditionedHead enabled (noise_dim={noise_dim})")
         else:
             self.head = ClassificationHead(
                 in_features = feat_dim,
@@ -214,11 +229,36 @@ class BirdCLEFModel(nn.Module):
 
         return feat
 
-    def forward(self, mel: torch.Tensor):
+    def get_embedding(
+        self,
+        mel:           torch.Tensor,           # (B, 1, n_mels, T)
+        noise_profile: Optional[torch.Tensor] = None,  # (B, noise_dim) or None
+    ) -> torch.Tensor:
+        """
+        Returns 512-dim hidden embedding (after first Linear+ReLU, before classifier).
+        Used by PrototypicalHead (Novel #4) and build_prototypes.py.
+
+        Works for both ClassificationHead and NoisyConditionedHead.
+        """
+        feat = self.extract_features(mel)           # (B, feat_dim)
+        if self.use_noise_conditioning and hasattr(self.head, "get_embedding"):
+            return self.head.get_embedding(feat, noise_profile)  # (B, 512)
+        elif hasattr(self.head, "get_embedding"):
+            return self.head.get_embedding(feat)    # ClassificationHead
+        else:
+            raise AttributeError("Head does not expose get_embedding()")
+
+    def forward(
+        self,
+        mel:           torch.Tensor,           # (B, 1, n_mels, T)
+        noise_profile: Optional[torch.Tensor] = None,  # (B, noise_dim) or None
+    ):
         """
         Args:
-            mel : (B, 1, n_mels, T)
-
+            mel           : (B, 1, n_mels, T)
+            noise_profile : (B, noise_dim) — soundscape noise descriptor.
+                            Only used when use_noise_conditioning=True.
+                            Pass None to use identity FiLM (unconditioned).
         Returns:
             CNN mode: (B, n_classes) logits
             SED mode: dict with clip_logits, frame_logits, attn_weights
@@ -226,17 +266,27 @@ class BirdCLEFModel(nn.Module):
         feat = self.extract_features(mel)
 
         if self.use_sed_head:
-            return self.head(feat)    # dict
+            return self.head(feat)
+        elif self.use_noise_conditioning:
+            return self.head(feat, noise_profile)   # NoisyConditionedHead
         else:
-            return self.head(feat)    # (B, n_classes)
+            return self.head(feat)                  # ClassificationHead
 
-    def get_logits(self, mel: torch.Tensor) -> torch.Tensor:
+    def get_logits(
+        self,
+        mel:           torch.Tensor,
+        noise_profile: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
         """Always returns clip-level logits (B, n_classes)."""
-        out = self.forward(mel)
+        out = self.forward(mel, noise_profile)
         if isinstance(out, dict):
             return out["clip_logits"]
         return out
 
-    def get_probabilities(self, mel: torch.Tensor) -> torch.Tensor:
+    def get_probabilities(
+        self,
+        mel:           torch.Tensor,
+        noise_profile: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
         """Returns sigmoid probabilities for inference."""
-        return torch.sigmoid(self.get_logits(mel))
+        return torch.sigmoid(self.get_logits(mel, noise_profile))

@@ -65,12 +65,13 @@ config = {
 
     # ── Schedule: cosine, NO warmup (Appendix B) ──────────────────────────
     "epochs": 50,
+    "limit_train_batches": 3000,  # Must match ECA — without this, epoch = ~146K steps (forever)
 
     # ── Training ─────────────────────────────────────────────────────────
-    "batch_size":      8,
-    "num_workers":     0,
-    "precision":       "32-true",
-    "accumulate_grad": 8,   # effective batch = 64
+    "batch_size":      4,    # Reduced from 8 — 4GB VRAM cannot handle 8 at fp32
+    "num_workers":     4,   # Use 4 workers; set to 0 only if Windows multiprocessing errors
+    "precision":       "bf16-mixed",  # Changed from 32-true — required for 4GB VRAM
+    "accumulate_grad": 16,  # Increased to 16 to keep effective batch = 64 (4×16=64)
 
     # ── EqualBalancing: γ=-1.0 for EffNetV2 (paper §5.2) ─────────────────
     "sampler_gamma":  -1.0,
@@ -82,6 +83,11 @@ config = {
     "use_secondary_labels": True,
     "bg_soundscape_paths":  [],
     "bg_esc50_paths":       [],
+
+    # ── NOVEL: DANN Domain Adaptation (Contribution #1) ───────────────────
+    "use_dann":          True,
+    "dann_lambda_max":   0.3,
+    "dann_hidden_dim":   512,
 
     # ── Pseudo-label (Stage 2) ────────────────────────────────────────────
     "labeled_fraction": 0.5,

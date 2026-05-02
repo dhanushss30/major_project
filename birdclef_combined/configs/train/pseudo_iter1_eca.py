@@ -31,7 +31,7 @@ config.update({
     "exp_name": (
         "eca_nfnet_l0_noamp_64bs_SqrtBalancing_"
         "Radamlr1e3_CosBatchLR1e6_Epoch50_FocalBCELoss_"
-        "PseudoF2PT05MT01P06I1_Full"
+        "PseudoF2PT05MT01P06I1_Full_TCR"
     ),
     "stage":                "pseudo",
 
@@ -41,6 +41,10 @@ config.update({
 
     # ── SoftAUC enabled for pseudo stage ──────────────────────────────────
     "auc_weight":           0.3,
+
+    # ── NOVEL #6: TCR enabled for pseudo-label stage ─────────────────────
+    "use_tcr":              True,
+    "tcr_weight":           0.1,
 
     # ── Slightly reduced LR for fine-tuning ───────────────────────────────
     "lr":                   5e-4,

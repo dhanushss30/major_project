@@ -47,4 +47,7 @@ config.update({
     "epochs":             20,      # Fewer epochs for pseudo stage
     "pretrained":         False,
     "pretrained_path":    None,    # Set to best checkpoint from pseudo_iter1_eca
+    # NOVEL #6: TCR enabled for pseudo-label stage
+    "use_tcr":            True,
+    "tcr_weight":         0.1,
 })

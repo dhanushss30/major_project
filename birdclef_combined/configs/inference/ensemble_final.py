@@ -154,6 +154,17 @@ config = {
         "PseudoF2PT05MT01P04I3_Full"
     ),
 
+    # ── Novel #7: Taxonomy-aware post-processing ────────────────────────
+    # If taxonomy head was trained, taxon-level predictions can gate
+    # species predictions at inference time.
+    "use_taxonomy_gating":  True,
+    "taxonomy_gate_thresh": 0.3,
+
+    # ── Novel #8: Multi-Resolution Mel ────────────────────────────────────
+    # Models trained with multi-res mel need this flag at inference.
+    "use_multi_res_mel":  False,
+    "multi_res_mode":     "stack",
+
     # ── ONNX/OpenVINO export settings ─────────────────────────────────────
     "onnx_opset":     17,
     "export_fp16_ov": True,

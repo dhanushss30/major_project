@@ -89,9 +89,52 @@ config = {
     "dann_lambda_max":   0.3,
     "dann_hidden_dim":   512,
 
+    # ── NOVEL #4: Prototypical Head for Rare Species ───────────────────
+    "use_prototypical":    True,
+    "proto_temperature":   0.05,
+    "proto_margin":        0.3,
+    "proto_rare_thr":      0.2,
+    "proto_loss_weight":   0.3,
+    "proto_half_life":     50,
+    "proto_max_weight":    0.75,
+    "prototypes_path":     None,
+    "class_counts_path":   None,
+
+    # ── NOVEL #5: Noise Conditioning (FiLM) ─────────────────────────────
+    "use_noise_conditioning": True,
+    "noise_dim":              128,
+
+    # ── NOVEL #6: Temporal Consistency Regularization ────────────────────
+    "use_tcr":            False,
+    "tcr_weight":         0.1,
+    "tcr_max_gap":        5.0,
+    "tcr_temperature":    2.0,
+
+    # ── NOVEL #7: Taxonomy-Aware Hierarchical Loss ──────────────────────
+    "use_taxonomy":                  True,
+    "taxonomy_hidden_dim":           128,
+    "taxonomy_aux_weight":           0.2,
+    "taxonomy_consistency_weight":   0.1,
+    "taxonomy_confusion_weight":     0.05,
+    "species_to_taxon":              {},     # Auto-loaded from species_to_taxon_path if empty
+    "species_to_taxon_path":         None,   # Path to JSON; defaults to configs/species_to_taxon.json
+
+    # ── NOVEL #8: Multi-Resolution Mel ──────────────────────────────────
+    "use_multi_res_mel":  False,
+    "multi_res_mode":     "stack",
+
+    # ── SWA ──────────────────────────────────────────────────────────────
+    "use_swa":          True,
+    "swa_lr":           1e-6,
+    "swa_start_frac":   0.75,
+
+    # ── Rare species oversampling ────────────────────────────────────────
+    "oversampling_map":      {},
+    "min_oversample_count":  100,
+
     # ── Pseudo-label (Stage 2) ────────────────────────────────────────────
     "labeled_fraction": 0.5,
-    "auc_weight_pseudo": 0.3,   # Enable SoftAUC for pseudo stages
+    "auc_weight_pseudo": 0.3,
 
     # ── EMA ──────────────────────────────────────────────────────────────
     "use_ema":   True,

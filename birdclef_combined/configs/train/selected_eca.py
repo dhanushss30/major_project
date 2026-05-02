@@ -119,6 +119,40 @@ config = {
     "use_noise_conditioning": True,
     "noise_dim":              128,   # Noise descriptor embedding dimension
 
+    # ── NOVEL #6: Temporal Consistency Regularization ────────────────────
+    # KL-div penalty between adjacent segments from the same soundscape.
+    # Active during pseudo-label / noisy-student stages only.
+    "use_tcr":            False,   # Enable in pseudo stage configs
+    "tcr_weight":         0.1,     # λ_tcr in the paper
+    "tcr_max_gap":        5.0,     # Max temporal gap (sec) for adjacency
+    "tcr_temperature":    2.0,     # Softmax temperature for TCR
+
+    # ── NOVEL #7: Taxonomy-Aware Hierarchical Loss ──────────────────────
+    # Exploits BirdCLEF+ 2025 multi-taxon structure (Aves/Insecta/Amphibia/Mammalia).
+    "use_taxonomy":                  True,
+    "taxonomy_hidden_dim":           128,
+    "taxonomy_aux_weight":           0.2,    # Auxiliary taxon classification
+    "taxonomy_consistency_weight":   0.1,    # Hierarchical consistency
+    "taxonomy_confusion_weight":     0.05,   # Cross-taxon confusion penalty
+    "species_to_taxon":              {},     # Auto-loaded from species_to_taxon_path if empty
+    "species_to_taxon_path":         None,   # Path to JSON; defaults to configs/species_to_taxon.json
+
+    # ── NOVEL #8: Multi-Resolution Spectral Fusion (MWSA) ──────────────
+    # 3-channel mel spectrogram at fine/medium/coarse resolutions.
+    # Enables ImageNet 3-channel pretrained weights.
+    "use_multi_res_mel":  False,   # Set True to enable 3-channel mel
+    "multi_res_mode":     "stack", # "stack" (3-ch) or "attention" (weighted 1-ch)
+
+    # ── SWA (Stochastic Weight Averaging) — from 2nd place ─────────────
+    "use_swa":          True,
+    "swa_lr":           1e-6,      # SWA learning rate (= min_lr)
+    "swa_start_frac":   0.75,      # Start SWA at 75% of training
+
+    # ── Rare species oversampling — from 2nd place GitHub ───────────────
+    # NFNet: 64 rare species get minor oversampling (10–96 extra draws)
+    "oversampling_map":      {},    # Dict[species_code, target_count]
+    "min_oversample_count":  100,   # Classes < 100 samples duplicated to 100
+
     # ── Pseudo-label config (Stage 2) ─────────────────────────────────────
     "labeled_fraction":    0.5,   # 50% labeled, 50% pseudo (Figure 4)
 

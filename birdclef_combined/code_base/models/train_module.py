@@ -34,8 +34,13 @@ from .domain_adaptation import (
 from .prototypical_head import PrototypicalHead, PrototypicalLoss
 from .noise_conditioning import NoiseProfileExtractor
 from ..augmentations.nnaudio_mel import MelExtractor
+from ..augmentations.multi_resolution_mel import MultiResolutionMelExtractor
 from ..augmentations.audio_aug import AudioMixUp, BackgroundNoiseMixer, SpectrogramAugmenter
 from ..losses.focal_bce import CombinedLoss
+from ..losses.temporal_consistency import TemporalConsistencyLoss
+from ..losses.taxonomy_loss import (
+    TaxonomyMapper, TaxonomyHead, TaxonomyAwareLoss, N_TAXA,
+)
 from ..utils.postprocessing import padded_auc_score
 
 logger = logging.getLogger(__name__)
@@ -73,19 +78,34 @@ class BirdCLEFModule(L.LightningModule):
             use_sed_head           = cfg.get("use_sed_head", False),
             use_noise_conditioning = cfg.get("use_noise_conditioning", False),  # Novel #5
             noise_dim              = cfg.get("noise_dim", 128),
+            use_multi_res_mel      = cfg.get("use_multi_res_mel", False),      # Novel #8
         )
 
-        # Mel extractor (nnAudio, on GPU)
-        self.mel = MelExtractor(
-            sr         = cfg.get("sr", 32_000),
-            n_mels     = cfg.get("n_mels", 128),
-            fmin       = cfg.get("fmin", 20.0),
-            fmax       = cfg.get("fmax", None),
-            n_fft      = cfg.get("n_fft", 2_048),
-            hop_length = cfg.get("hop_length", 512),
-            top_db     = cfg.get("top_db", 80.0),
-            amin       = cfg.get("amin", 1e-10),
-        )
+        # ── Mel extractor — standard or multi-resolution (Novel #8) ──────
+        self.use_multi_res_mel = cfg.get("use_multi_res_mel", False)
+        if self.use_multi_res_mel:
+            self.mel = MultiResolutionMelExtractor(
+                sr     = cfg.get("sr", 32_000),
+                n_mels = cfg.get("n_mels", 128),
+                fmin   = cfg.get("fmin", 20.0),
+                fmax   = cfg.get("fmax", None),
+                top_db = cfg.get("top_db", 80.0),
+                amin   = cfg.get("amin", 1e-10),
+                mode   = cfg.get("multi_res_mode", "stack"),
+            )
+            logger.info("Multi-Resolution Mel: ENABLED "
+                       f"(mode={cfg.get('multi_res_mode', 'stack')})")
+        else:
+            self.mel = MelExtractor(
+                sr         = cfg.get("sr", 32_000),
+                n_mels     = cfg.get("n_mels", 128),
+                fmin       = cfg.get("fmin", 20.0),
+                fmax       = cfg.get("fmax", None),
+                n_fft      = cfg.get("n_fft", 2_048),
+                hop_length = cfg.get("hop_length", 512),
+                top_db     = cfg.get("top_db", 80.0),
+                amin       = cfg.get("amin", 1e-10),
+            )
 
         # Audio-domain MixUp (50% probability, paper §5.2)
         self.mixup = AudioMixUp(
@@ -199,6 +219,45 @@ class BirdCLEFModule(L.LightningModule):
             )
         # ─────────────────────────────────────────────────────────────────
 
+        # ── NOVEL #6: Temporal Consistency Regularization ──────────────────
+        self.use_tcr = cfg.get("use_tcr", False)
+        self._tcr_loss = None
+
+        if self.use_tcr:
+            self._tcr_loss = TemporalConsistencyLoss(
+                weight      = cfg.get("tcr_weight", 0.1),
+                max_gap     = cfg.get("tcr_max_gap", 5.0),
+                temperature = cfg.get("tcr_temperature", 2.0),
+            )
+            logger.info(f"Temporal Consistency Regularization: ENABLED "
+                       f"(weight={cfg.get('tcr_weight', 0.1)})")
+        # ─────────────────────────────────────────────────────────────────
+
+        # ── NOVEL #7: Taxonomy-Aware Hierarchical Loss ───────────────────
+        self.use_taxonomy = cfg.get("use_taxonomy", False)
+        self._taxonomy_head = None
+        self._taxonomy_loss = None
+        self._taxonomy_mapper = None
+
+        if self.use_taxonomy:
+            from .backbone import BACKBONE_REGISTRY
+            feat_dim = BACKBONE_REGISTRY.get(cfg["backbone"], (None, 1280))[1]
+
+            self._taxonomy_head = TaxonomyHead(
+                in_features = feat_dim,
+                n_taxa      = N_TAXA,
+                hidden_dim  = cfg.get("taxonomy_hidden_dim", 128),
+            )
+            self._taxonomy_loss = TaxonomyAwareLoss(
+                aux_weight         = cfg.get("taxonomy_aux_weight", 0.2),
+                consistency_weight = cfg.get("taxonomy_consistency_weight", 0.1),
+                confusion_weight   = cfg.get("taxonomy_confusion_weight", 0.05),
+            )
+            logger.info("Taxonomy-Aware Loss: ENABLED "
+                       f"(aux={cfg.get('taxonomy_aux_weight', 0.2)}, "
+                       f"consistency={cfg.get('taxonomy_consistency_weight', 0.1)})")
+        # ─────────────────────────────────────────────────────────────────
+
         # EMA
         self.use_ema    = cfg.get("use_ema", True)
         self.ema_decay  = cfg.get("ema_decay", 0.999)
@@ -207,6 +266,15 @@ class BirdCLEFModule(L.LightningModule):
         # Validation cache
         self._val_probs:   List[np.ndarray] = []
         self._val_targets: List[np.ndarray] = []
+
+    # ── Taxonomy mapper initialisation ──────────────────────────────────
+
+    def set_taxonomy_mapper(self, label_to_idx: dict, species_to_taxon: dict):
+        if self._taxonomy_loss is not None:
+            self._taxonomy_mapper = TaxonomyMapper(
+                label_to_idx     = label_to_idx,
+                species_to_taxon = species_to_taxon,
+            )
 
     # ── Prototype rarity initialisation ──────────────────────────────────
 
@@ -373,6 +441,36 @@ class BirdCLEFModule(L.LightningModule):
                              on_step=True, prog_bar=False)
         # ─────────────────────────────────────────────────────────────────
 
+        # ── NOVEL #6: Temporal Consistency Regularization ─────────────────
+        if self.use_tcr and self._tcr_loss is not None:
+            filenames  = batch.get("filename", [])
+            start_secs = batch.get("start_sec", None)
+            if filenames and start_secs is not None:
+                tcr_loss = self._tcr_loss(logits, filenames, start_secs)
+                loss = loss + tcr_loss
+                if batch_idx % 100 == 0:
+                    self.log("train/tcr_loss", tcr_loss,
+                             on_step=True, prog_bar=False)
+        # ─────────────────────────────────────────────────────────────────
+
+        # ── NOVEL #7: Taxonomy-Aware Hierarchical Loss ───────────────────
+        if (self.use_taxonomy and self._taxonomy_head is not None
+                and self._taxonomy_mapper is not None):
+            taxon_logits = self._taxonomy_head(features)
+            taxon_labels = self._taxonomy_mapper.get_taxon_labels(labels)
+            taxonomy_loss = self._taxonomy_loss(
+                species_logits = logits,
+                taxon_logits   = taxon_logits,
+                species_labels = labels,
+                taxon_labels   = taxon_labels,
+                mapper         = self._taxonomy_mapper,
+            )
+            loss = loss + taxonomy_loss
+            if batch_idx % 100 == 0:
+                self.log("train/taxonomy_loss", taxonomy_loss,
+                         on_step=True, prog_bar=False)
+        # ─────────────────────────────────────────────────────────────────
+
         # EMA update
         if batch_idx % 5 == 0:
             self._update_ema()
@@ -452,6 +550,11 @@ class BirdCLEFModule(L.LightningModule):
             # Noise extractor MLP at standard LR
             param_groups.append(
                 {"params": self._noise_extractor.parameters(), "lr": lr}
+            )
+
+        if self.use_taxonomy and self._taxonomy_head is not None:
+            param_groups.append(
+                {"params": self._taxonomy_head.parameters(), "lr": lr * 2.0}
             )
 
         params = param_groups if len(param_groups) > 1 else list(self.model.parameters())

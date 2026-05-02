@@ -295,14 +295,20 @@ class BalancedSampler(Sampler):
     From paper §5.2:
     "For NFNet: all classes with fewer than 100 samples were duplicated
      until they reached this threshold."
+
+    oversampling_map: Dict[str, int] — species → target count. Species with
+    fewer samples than the target are upweighted to reach it. From 2nd place
+    GitHub: 64 rare species get minor oversampling (10–96 extra draws).
     """
 
     def __init__(
         self,
-        df:          pd.DataFrame,
-        gamma:       float         = -0.5,
-        n_samples:   Optional[int] = None,
-        replacement: bool          = True,
+        df:                pd.DataFrame,
+        gamma:             float         = -0.5,
+        n_samples:         Optional[int] = None,
+        replacement:       bool          = True,
+        oversampling_map:  Optional[Dict[str, int]] = None,
+        min_count:         int           = 0,
     ):
         self.gamma       = gamma
         self.n_samples   = n_samples or len(df)
@@ -317,6 +323,14 @@ class BalancedSampler(Sampler):
             lbl   = df.iloc[i][label_col]
             c_i   = counts.get(lbl, 1)
             w_i   = (c_i / total) ** gamma
+
+            if oversampling_map and lbl in oversampling_map:
+                target = oversampling_map[lbl]
+                if c_i < target:
+                    w_i *= target / c_i
+            elif min_count > 0 and c_i < min_count:
+                w_i *= min_count / c_i
+
             weights.append(w_i)
 
         w = torch.tensor(weights, dtype=torch.float64)
@@ -473,15 +487,14 @@ class PseudoLabelDataset(Dataset):
 
     def __getitem__(self, idx: int) -> Dict:
         if idx < self.n_labeled:
-            # Labeled sample (cycled with augmentation)
             labeled_idx = idx % len(self.labeled_ds)
-            return self.labeled_ds[labeled_idx]
+            item = self.labeled_ds[labeled_idx]
+            item["start_sec"] = torch.tensor(0.0)
+            return item
 
-        # Pseudo-labeled sample
         pseudo_idx = idx - self.n_labeled
         row        = self.pseudo_df.iloc[pseudo_idx]
 
-        # Load audio chunk
         audio_path  = self.soundscape_root / row["filename"]
         start_sec   = float(row.get("start_sec", 0.0))
         start_samp  = int(start_sec * self.sr)
@@ -504,7 +517,6 @@ class PseudoLabelDataset(Dataset):
         except Exception:
             pass
 
-        # Soft pseudo-labels
         raw_label = row.get(self.pseudo_col, None)
         if raw_label is not None:
             label = np.array(raw_label, dtype=np.float32)
@@ -512,8 +524,9 @@ class PseudoLabelDataset(Dataset):
             label = np.zeros(self.labeled_ds.n_classes, dtype=np.float32)
 
         return {
-            "audio":    torch.tensor(audio, dtype=torch.float32),
-            "label":    torch.tensor(label, dtype=torch.float32),
-            "idx":      self._total - len(self.pseudo_df) + pseudo_idx,
-            "filename": str(row.get("filename", "")),
+            "audio":     torch.tensor(audio, dtype=torch.float32),
+            "label":     torch.tensor(label, dtype=torch.float32),
+            "idx":       self._total - len(self.pseudo_df) + pseudo_idx,
+            "filename":  str(row.get("filename", "")),
+            "start_sec": torch.tensor(start_sec),
         }

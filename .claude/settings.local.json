@@ -2,7 +2,16 @@
   "permissions": {
     "allow": [
       "WebFetch(domain:raw.githubusercontent.com)",
-      "Bash(python -c \"import ast; ast.parse\\(open\\('scripts/main_inference.py'\\).read\\(\\)\\); print\\('OK'\\)\")"
+      "Bash(python -c \"import ast; ast.parse\\(open\\('scripts/main_inference.py'\\).read\\(\\)\\); print\\('OK'\\)\")",
+      "Bash(pip install *)",
+      "Bash(where python *)",
+      "Bash(pip list *)",
+      "Bash(findstr -i torch)",
+      "Bash(C:\\\\Users\\\\User\\\\Downloads\\\\birdclef_2025_combined_FINAL\\\\.venv\\\\Scripts\\\\python.exe *)",
+      "PowerShell(& \"C:\\\\Users\\\\User\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python311\\\\python.exe\" -c \"import torch; print\\(f'PyTorch {torch.__version__}, CUDA: {torch.cuda.is_available\\(\\)}'\\)\")",
+      "PowerShell(nvidia-smi *)",
+      "PowerShell(Get-CimInstance *)",
+      "Bash(python -c ' *)"
     ]
   }
 }

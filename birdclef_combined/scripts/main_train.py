@@ -27,11 +27,16 @@ try:
     import lightning as L
     from lightning.pytorch.callbacks import (
         ModelCheckpoint, LearningRateMonitor, RichProgressBar,
+        StochasticWeightAveraging,
     )
     from lightning.pytorch.loggers import TensorBoardLogger, WandbLogger
 except ImportError:
     import pytorch_lightning as L
     from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
+    try:
+        from pytorch_lightning.callbacks import StochasticWeightAveraging
+    except ImportError:
+        StochasticWeightAveraging = None
 
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -187,19 +192,52 @@ def build_datasets(cfg: dict, df: pd.DataFrame, fold: int, label_to_idx: dict):
 
 def build_dataloader(ds, cfg: dict, is_train: bool):
     if is_train:
-        # Balanced sampler with γ from config
-        gamma    = cfg.get("sampler_gamma", -0.5)    # -0.5 NFNet, -1.0 EffNetV2
-        if hasattr(ds, "labeled_ds"):
-            sampler_df = ds.labeled_ds.df
-        else:
-            sampler_df = ds.df
+        gamma = cfg.get("sampler_gamma", -0.5)
 
-        sampler = BalancedSampler(
-            df          = sampler_df,
-            gamma       = gamma,
-            n_samples   = cfg.get("steps_per_epoch", len(ds)) * cfg.get("batch_size", 64),
-            replacement = True,
-        )
+        if hasattr(ds, "labeled_ds"):
+            # PseudoLabelDataset: build balanced weights covering [0, len(ds)).
+            # Indices [0, n_labeled) → labeled data; [n_labeled, total) → pseudo.
+            sampler_df = ds.labeled_ds.df
+            labeled_sampler = BalancedSampler(
+                df               = sampler_df,
+                gamma            = gamma,
+                n_samples        = len(sampler_df),
+                replacement      = False,
+                oversampling_map = cfg.get("oversampling_map", None),
+                min_count        = cfg.get("min_oversample_count", 0),
+            )
+            src_w = labeled_sampler.weights
+            n_src = len(src_w)
+
+            # Resize labeled weights to exactly ds.n_labeled (cycle if needed)
+            if ds.n_labeled <= n_src:
+                labeled_w = src_w[:ds.n_labeled]
+            else:
+                repeats = (ds.n_labeled + n_src - 1) // n_src
+                labeled_w = src_w.repeat(repeats)[:ds.n_labeled]
+
+            n_pseudo = len(ds) - ds.n_labeled
+            if n_pseudo > 0:
+                pseudo_w = torch.full((n_pseudo,), labeled_w.mean().item(), dtype=torch.float64)
+                all_w = torch.cat([labeled_w, pseudo_w])
+            else:
+                all_w = labeled_w
+            all_w = all_w / all_w.sum()
+            n_samples = cfg.get("steps_per_epoch", len(ds)) * cfg.get("batch_size", 64)
+            sampler = torch.utils.data.WeightedRandomSampler(
+                weights     = all_w,
+                num_samples = n_samples,
+                replacement = True,
+            )
+        else:
+            sampler = BalancedSampler(
+                df               = ds.df,
+                gamma            = gamma,
+                n_samples        = cfg.get("steps_per_epoch", len(ds)) * cfg.get("batch_size", 64),
+                replacement      = True,
+                oversampling_map = cfg.get("oversampling_map", None),
+                min_count        = cfg.get("min_oversample_count", 0),
+            )
         shuffle = False
     else:
         sampler = None
@@ -233,6 +271,24 @@ def train_fold(cfg: dict, df: pd.DataFrame, label_to_idx: dict, fold: int, logdi
 
     model = BirdCLEFModule(cfg_with_steps)
 
+    # Initialize taxonomy mapper (Novel #7) if enabled
+    if cfg.get("use_taxonomy", False):
+        species_to_taxon = cfg.get("species_to_taxon", {})
+        if not species_to_taxon:
+            taxon_json = cfg.get("species_to_taxon_path",
+                                 str(PROJECT_ROOT / "configs" / "species_to_taxon.json"))
+            if Path(taxon_json).exists():
+                with open(taxon_json) as f:
+                    species_to_taxon = json.load(f)
+                logger.info(f"Loaded taxonomy mapping: {len(species_to_taxon)} species from {taxon_json}")
+            else:
+                logger.warning(
+                    f"Taxonomy mapping empty and {taxon_json} not found. "
+                    "Run: python scripts/build_taxonomy_map.py --data_root <path> first. "
+                    "All species will default to Aves (taxon 0)."
+                )
+        model.set_taxonomy_mapper(label_to_idx, species_to_taxon)
+
     fold_dir = logdir / f"fold_{fold}"
 
     callbacks = [
@@ -241,13 +297,23 @@ def train_fold(cfg: dict, df: pd.DataFrame, label_to_idx: dict, fold: int, logdi
             filename  = "best-epoch{epoch:02d}-auc{val/auc:.4f}",
             monitor   = "val/auc",
             mode      = "max",
-            save_top_k = 2,
+            save_top_k = 3,
             save_last  = True,
             verbose    = True,
             auto_insert_metric_name = False,
         ),
         LearningRateMonitor(logging_interval="step"),
     ]
+
+    # SWA: average top checkpoints for better generalization (2nd place trick)
+    if cfg.get("use_swa", False) and StochasticWeightAveraging is not None:
+        swa_lr = cfg.get("swa_lr", cfg.get("min_lr", 1e-6))
+        swa_start_epoch = int(cfg.get("epochs", 50) * cfg.get("swa_start_frac", 0.75))
+        callbacks.append(StochasticWeightAveraging(
+            swa_lrs        = swa_lr,
+            swa_epoch_start = swa_start_epoch,
+        ))
+        logger.info(f"SWA: enabled from epoch {swa_start_epoch} with lr={swa_lr}")
 
     logger_cls = WandbLogger if cfg.get("use_wandb") else TensorBoardLogger
     pl_logger  = logger_cls(save_dir=str(fold_dir), name="logs")

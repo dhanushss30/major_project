@@ -121,6 +121,7 @@ class BirdCLEFModel(nn.Module):
         use_sed_head:          bool          = False,
         use_noise_conditioning: bool         = False,   # Novel #5
         noise_dim:             int           = 128,     # Novel #5
+        use_multi_res_mel:     bool          = False,   # Novel #8
     ):
         super().__init__()
 
@@ -129,11 +130,13 @@ class BirdCLEFModel(nn.Module):
         self.use_sed_head           = use_sed_head
         self.use_noise_conditioning = use_noise_conditioning
 
+        actual_in_chans = 3 if use_multi_res_mel else in_chans
+
         # Backbone
         self.backbone = create_timm_backbone(
             backbone_name,
             pretrained = pretrained and pretrained_path is None,
-            in_chans   = in_chans,
+            in_chans   = actual_in_chans,
         )
 
         # GeM pooling over (H', W') → (C,)
@@ -141,7 +144,7 @@ class BirdCLEFModel(nn.Module):
 
         # Auto-detect actual feature dimension (registry values can be wrong)
         with torch.no_grad():
-            dummy = torch.zeros(1, in_chans, 128, 128)
+            dummy = torch.zeros(1, actual_in_chans, 128, 128)
             dummy_feat = self.backbone(dummy)
             if dummy_feat.dim() == 4:
                 feat_dim = dummy_feat.shape[1]   # (B, C, H, W) → C

@@ -84,19 +84,19 @@ config = {
     "bg_soundscape_paths":  [],
     "bg_esc50_paths":       [],
 
-    # ── NOVEL: DANN Domain Adaptation (Contribution #1) ───────────────────
+    # ── NOVEL #1: DANN Domain Adaptation ───────────────────────────────────
     "use_dann":          True,
-    "dann_lambda_max":   0.3,
+    "dann_lambda_max":   0.1,
     "dann_hidden_dim":   512,
 
     # ── NOVEL #4: Prototypical Head for Rare Species ───────────────────
     "use_prototypical":    True,
-    "proto_temperature":   0.05,
+    "proto_temperature":   0.1,
     "proto_margin":        0.3,
     "proto_rare_thr":      0.2,
-    "proto_loss_weight":   0.3,
+    "proto_loss_weight":   0.1,
     "proto_half_life":     50,
-    "proto_max_weight":    0.75,
+    "proto_max_weight":    0.5,
     "prototypes_path":     None,
     "class_counts_path":   None,
 
@@ -106,16 +106,16 @@ config = {
 
     # ── NOVEL #6: Temporal Consistency Regularization ────────────────────
     "use_tcr":            False,
-    "tcr_weight":         0.1,
+    "tcr_weight":         0.05,
     "tcr_max_gap":        5.0,
     "tcr_temperature":    2.0,
 
     # ── NOVEL #7: Taxonomy-Aware Hierarchical Loss ──────────────────────
     "use_taxonomy":                  True,
     "taxonomy_hidden_dim":           128,
-    "taxonomy_aux_weight":           0.2,
-    "taxonomy_consistency_weight":   0.1,
-    "taxonomy_confusion_weight":     0.05,
+    "taxonomy_aux_weight":           0.1,
+    "taxonomy_consistency_weight":   0.05,
+    "taxonomy_confusion_weight":     0.02,
     "species_to_taxon":              {},     # Auto-loaded from species_to_taxon_path if empty
     "species_to_taxon_path":         None,   # Path to JSON; defaults to configs/species_to_taxon.json
 
@@ -131,6 +131,7 @@ config = {
     # ── Rare species oversampling ────────────────────────────────────────
     "oversampling_map":      {},
     "min_oversample_count":  100,
+    "use_rating_weight":     True,
 
     # ── Pseudo-label (Stage 2) ────────────────────────────────────────────
     "labeled_fraction": 0.5,

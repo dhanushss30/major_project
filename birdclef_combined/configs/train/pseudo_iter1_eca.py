@@ -44,7 +44,7 @@ config.update({
 
     # ── NOVEL #6: TCR enabled for pseudo-label stage ─────────────────────
     "use_tcr":              True,
-    "tcr_weight":           0.1,
+    "tcr_weight":           0.05,
 
     # ── Slightly reduced LR for fine-tuning ───────────────────────────────
     "lr":                   5e-4,

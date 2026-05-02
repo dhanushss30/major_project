@@ -40,5 +40,5 @@ config.update({
     "pretrained_path":    None,  # Set to Stage 1 best checkpoint
     # NOVEL #6: TCR enabled for pseudo-label stage
     "use_tcr":            True,
-    "tcr_weight":         0.1,
+    "tcr_weight":         0.05,
 })

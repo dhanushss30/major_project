@@ -96,44 +96,36 @@ config = {
 
     # ── NOVEL #1: DANN Domain Adaptation ─────────────────────────────────
     "use_dann":          True,
-    "dann_lambda_max":   0.3,
+    "dann_lambda_max":   0.1,      # Conservative: aux loss should be small vs primary
     "dann_hidden_dim":   512,
 
     # ── NOVEL #4: Prototypical Head for Rare Species ───────────────────
-    # Set use_prototypical: True to enable contrastive prototype training.
-    # After training, run build_prototypes.py to compute better prototypes.
-    # Then set prototypes_path and class_counts_path for inference.
     "use_prototypical":    True,
-    "proto_temperature":   0.05,   # Cosine similarity temperature
-    "proto_margin":        0.3,    # Push margin for negative prototype pairs
-    "proto_rare_thr":      0.2,    # Min rarity weight to include in proto loss
-    "proto_loss_weight":   0.3,    # Weight of proto loss vs main BCE/Focal
-    "proto_half_life":     50,     # Class count where w_c = max_weight/e
-    "proto_max_weight":    0.75,   # Max prototype blend weight (rarest class)
-    "prototypes_path":     None,   # Set to .pt file after build_prototypes.py
-    "class_counts_path":   None,   # Set to .pt file after build_prototypes.py
+    "proto_temperature":   0.1,    # 0.05 was too aggressive (sigmoid saturates)
+    "proto_margin":        0.3,
+    "proto_rare_thr":      0.2,
+    "proto_loss_weight":   0.1,    # Reduced from 0.3 — aux losses must not dominate
+    "proto_half_life":     50,
+    "proto_max_weight":    0.5,    # Reduced from 0.75 — leave more room for classifier
+    "prototypes_path":     None,
+    "class_counts_path":   None,
 
     # ── NOVEL #5: Soundscape Noise-Conditioned Features (FiLM) ────────
-    # Adapts classifier features using Long-Term Average Spectrum of soundscape.
-    # Requires soundscape_root to be set (uses same buffer as DANN).
     "use_noise_conditioning": True,
-    "noise_dim":              128,   # Noise descriptor embedding dimension
+    "noise_dim":              128,
 
     # ── NOVEL #6: Temporal Consistency Regularization ────────────────────
-    # KL-div penalty between adjacent segments from the same soundscape.
-    # Active during pseudo-label / noisy-student stages only.
     "use_tcr":            False,   # Enable in pseudo stage configs
-    "tcr_weight":         0.1,     # λ_tcr in the paper
-    "tcr_max_gap":        5.0,     # Max temporal gap (sec) for adjacency
-    "tcr_temperature":    2.0,     # Softmax temperature for TCR
+    "tcr_weight":         0.05,    # Reduced from 0.1 — regularizer, not primary signal
+    "tcr_max_gap":        5.0,
+    "tcr_temperature":    2.0,
 
     # ── NOVEL #7: Taxonomy-Aware Hierarchical Loss ──────────────────────
-    # Exploits BirdCLEF+ 2025 multi-taxon structure (Aves/Insecta/Amphibia/Mammalia).
     "use_taxonomy":                  True,
     "taxonomy_hidden_dim":           128,
-    "taxonomy_aux_weight":           0.2,    # Auxiliary taxon classification
-    "taxonomy_consistency_weight":   0.1,    # Hierarchical consistency
-    "taxonomy_confusion_weight":     0.05,   # Cross-taxon confusion penalty
+    "taxonomy_aux_weight":           0.1,    # Reduced from 0.2
+    "taxonomy_consistency_weight":   0.05,   # Reduced from 0.1
+    "taxonomy_confusion_weight":     0.02,   # Reduced from 0.05
     "species_to_taxon":              {},     # Auto-loaded from species_to_taxon_path if empty
     "species_to_taxon_path":         None,   # Path to JSON; defaults to configs/species_to_taxon.json
 
@@ -152,6 +144,7 @@ config = {
     # NFNet: 64 rare species get minor oversampling (10–96 extra draws)
     "oversampling_map":      {},    # Dict[species_code, target_count]
     "min_oversample_count":  100,   # Classes < 100 samples duplicated to 100
+    "use_rating_weight":     True,  # Weight samples by XC rating (0-5); cleaner audio sampled more
 
     # ── Pseudo-label config (Stage 2) ─────────────────────────────────────
     "labeled_fraction":    0.5,   # 50% labeled, 50% pseudo (Figure 4)

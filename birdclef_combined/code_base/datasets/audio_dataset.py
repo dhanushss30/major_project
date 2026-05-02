@@ -309,6 +309,7 @@ class BalancedSampler(Sampler):
         replacement:       bool          = True,
         oversampling_map:  Optional[Dict[str, int]] = None,
         min_count:         int           = 0,
+        use_rating_weight: bool          = False,
     ):
         self.gamma       = gamma
         self.n_samples   = n_samples or len(df)
@@ -317,10 +318,13 @@ class BalancedSampler(Sampler):
         label_col = "primary_label" if "primary_label" in df.columns else "label"
         counts    = df[label_col].value_counts().to_dict()
 
+        has_rating = use_rating_weight and "rating" in df.columns
+
         total = sum(counts.values())
         weights = []
         for i in range(len(df)):
-            lbl   = df.iloc[i][label_col]
+            row   = df.iloc[i]
+            lbl   = row[label_col]
             c_i   = counts.get(lbl, 1)
             w_i   = (c_i / total) ** gamma
 
@@ -330,6 +334,10 @@ class BalancedSampler(Sampler):
                     w_i *= target / c_i
             elif min_count > 0 and c_i < min_count:
                 w_i *= min_count / c_i
+
+            if has_rating:
+                r = float(row.get("rating", 0))
+                w_i *= 0.5 + 0.1 * min(r, 5.0)
 
             weights.append(w_i)
 

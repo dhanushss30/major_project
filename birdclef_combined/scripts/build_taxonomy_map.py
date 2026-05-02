@@ -44,20 +44,38 @@ KNOWN_MAMMALIA = [
 
 
 def build_taxonomy_map(data_root: str) -> dict:
-    df = pd.read_csv(Path(data_root) / "train.csv")
-
+    root = Path(data_root)
     species_to_taxon = {}
+
+    taxonomy_path = root / "taxonomy.csv"
+    if taxonomy_path.exists():
+        tax_df = pd.read_csv(taxonomy_path)
+        if "class_name" in tax_df.columns:
+            for _, row in tax_df.iterrows():
+                species = str(row["primary_label"])
+                taxon_idx = TAXON_MAP.get(row["class_name"], 0)
+                species_to_taxon[species] = taxon_idx
+
+            counts = {}
+            for v in species_to_taxon.values():
+                label = [k for k, val in TAXON_MAP.items() if val == v][0]
+                counts[label] = counts.get(label, 0) + 1
+            print(f"Taxonomy mapping from taxonomy.csv: {counts}")
+            return species_to_taxon
+
+    df = pd.read_csv(root / "train.csv")
 
     if "class_name" in df.columns or "taxonomic_class" in df.columns:
         tax_col = "class_name" if "class_name" in df.columns else "taxonomic_class"
         for _, row in df.drop_duplicates("primary_label").iterrows():
-            species = row["primary_label"]
+            species = str(row["primary_label"])
             taxon_str = str(row.get(tax_col, "Aves"))
             taxon_idx = TAXON_MAP.get(taxon_str, 0)
             species_to_taxon[species] = taxon_idx
     else:
         all_species = df["primary_label"].unique()
         for sp in all_species:
+            sp = str(sp)
             if sp in KNOWN_INSECTS:
                 species_to_taxon[sp] = 2
             elif sp in KNOWN_AMPHIBIA:

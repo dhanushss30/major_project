@@ -237,6 +237,7 @@ def build_dataloader(ds, cfg: dict, is_train: bool):
                 replacement      = True,
                 oversampling_map = cfg.get("oversampling_map", None),
                 min_count        = cfg.get("min_oversample_count", 0),
+                use_rating_weight = cfg.get("use_rating_weight", False),
             )
         shuffle = False
     else:

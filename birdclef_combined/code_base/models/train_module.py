@@ -527,7 +527,7 @@ class BirdCLEFModule(L.LightningModule):
             # Causal classification (auxiliary signal — ensures f_causal is discriminative)
             causal_logits = self._causal_head(f_causal)
             causal_cls_loss = self.loss_fn(causal_logits, labels)
-            loss = loss + 0.5 * causal_cls_loss
+            loss = loss + self.cfg.get("causal_cls_weight", 0.05) * causal_cls_loss
 
             # Counterfactual invariance: same bird, different background
             # Re-use the DANN buffer for noise (if available)

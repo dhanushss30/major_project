@@ -131,6 +131,7 @@ config = {
     "causal_lambda_inv":       0.02,   # Reduced: was 1.0 — this was the main culprit (50x too large)
     "causal_lambda_hsic":      0.02,   # Reduced: was 0.1
     "causal_warmup_steps":     3000,   # Increased: was 1000 — ramp up more slowly
+    "causal_cls_weight":       0.05,   # Reduced: was hardcoded 0.5 in train_module.py
 
     # ── SWA ──────────────────────────────────────────────────────────────
     "use_swa":          False,  # Disabled: deepcopy conflict with custom modules

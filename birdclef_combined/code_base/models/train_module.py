@@ -669,12 +669,28 @@ class BirdCLEFModule(L.LightningModule):
             )
 
         # Cosine schedule, NO warmup (paper: "cosine schedule down to 1e-6 without warm-up")
-        total_steps  = self.cfg.get("epochs", 50) * self.cfg.get("steps_per_epoch", 1000)
+        # FIX: Use trainer.estimated_stepping_batches which correctly accounts for
+        # limit_train_batches AND accumulate_grad_batches. Previous calculation used
+        # steps_per_epoch=len(train_dl) which ignored limit_train_batches=3000, causing
+        # the LR cosine to span ~1.4M steps when only 37,500 actually run (no LR decay).
+        try:
+            total_steps = max(int(self.trainer.estimated_stepping_batches), 1)
+        except Exception:
+            limit = self.cfg.get("limit_train_batches", 1.0)
+            steps_per_epoch_raw = self.cfg.get("steps_per_epoch", 1000)
+            if isinstance(limit, int):
+                effective = min(limit, steps_per_epoch_raw)
+            else:
+                effective = int(steps_per_epoch_raw * limit)
+            accum = max(self.cfg.get("accumulate_grad", 1), 1)
+            total_steps = max(self.cfg.get("epochs", 50) * effective // accum, 1)
+
         scheduler    = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer,
             T_max    = total_steps,
             eta_min  = min_lr,
         )
+        logger.info(f"Cosine scheduler T_max set to {total_steps} optimizer steps")
 
         return {
             "optimizer": optimizer,

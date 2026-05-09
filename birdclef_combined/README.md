@@ -1,53 +1,67 @@
-# BirdCLEF+ 2025 — Combined 1st & 2nd Place Solution
-## Multi-Taxonomic Species Identification from Noisy Soundscapes
+# BirdCLEF+ 2025 — Multi-Taxonomic Species Identification from Noisy Soundscapes
 
-> **Major Project | Deep Learning & Bioacoustics**  
-> Combines winning solutions from the BirdCLEF+ 2025 Kaggle Competition (2,025 teams)
+> **Major Project | Deep Learning & Bioacoustics**
 
 ---
 
-## Competition Context
+## Problem Statement
 
-**Task**: Identify 206 species (birds, amphibians, insects, mammals) from 1-minute  
+**Task**: Identify 206 species (birds, amphibians, insects, mammals) from 1-minute
 passive acoustic monitoring soundscapes recorded in Colombia's Magdalena Valley.
 
 **Key challenges**:
 - Severe domain shift: clean single-species training clips vs. noisy multi-species soundscapes
 - Extreme class imbalance: some species have only 2 recordings (~11 seconds total)
-- Strict CPU-only inference: 700 soundscapes in 90 minutes
 - Multi-label nature: soundscapes contain up to 25 simultaneous species
+- Multi-taxonomic classification across four biological classes
 
 ---
 
-## Solution Architecture
+## Contributions
 
-### From 2nd Place (Sydorskyi & Gonçalves — Private AUC 0.928)
-- ECA-NFNet-L0 + EfficientNetV2-S-in21k dual-backbone ensemble
-- HDF5 byte-wise random 5-sec chunk loading
-- nnAudio on-the-fly GPU mel extraction (n_fft=2048, hop=512, n_mels=128)
-- GeM pooling with 512-channel classification head (dropout 0.25 + 0.5)
-- RAdam (NFNet) / AdamW (EffNetV2) + cosine LR to 1e-6, 50 epochs, batch 64
-- MixUp (audio domain, p=0.5) + BackgroundNoise (soundscape + ESC-50, p=0.5)
-- SpecAugment + RandomFiltering (random equalizer for channel distortion simulation)
-- Power-scaled soft pseudo-labels, iterative: 3 rounds (19,405 + 3,750 + 4,108 chunks)
-- TopN post-processing (N=1): multiply per-segment prob by top-1 segment prob in same file
-- Optuna-based ensemble selection across 15 models (3 experiments × 5 folds)
-- OpenVINO FP16 export for CPU inference
+This project introduces components on top of a strong audio classification baseline:
 
-### From 1st Place (Babych — Private AUC ~0.933)
-- Multi-iterative noisy student: power transform p^α (α: 0.6→0.5→0.4 per iteration)
-- SED (Sound Event Detection) frame-level temporal localization for pseudo-label refinement
-- Separate specialist pipeline for insects and amphibians (+0.003 AUC)
-- TTA with ±2.5s temporal delta shifts
-- SoftAUC loss: differentiable pairwise AUC optimization (since metric = AUC, optimize AUC)
-- EfficientNet-L0, B3, B4 + RegNetY ensemble diversity
+| # | Feature | What it does |
+|---|---------|-------------|
+| 1 | **DANN Domain Adaptation** | Aligns training clip features with soundscape features via gradient reversal to close the domain gap |
+| 2 | **MC Dropout Uncertainty** | Filters unreliable pseudo-labels using Monte Carlo Dropout variance — only high-confidence predictions are retained |
+| 3 | **Causal Feature Disentanglement** | Separates bird vocalizations (causal) from environmental noise (spurious) using HSIC independence penalty |
+| 4 | **Prototypical Head for Rare Species** | Prototype-based nearest-neighbor classifier for species with fewer than 20 recordings |
+| 5 | **Noise-Conditioned FiLM Layers** | Estimates ambient noise level from the spectrogram and adapts feature normalization dynamically |
+| 6 | **Temporal Consistency Regularization** | Penalizes contradictory predictions across overlapping time windows of the same soundscape |
+| 7 | **Taxonomy-Aware Hierarchical Loss** | Adds auxiliary loss at the taxonomic group level (Aves / Amphibia / Insecta / Mammalia) to improve rare-class generalization |
+| 8 | **Multi-Resolution Spectral Fusion** | Stacks mel spectrograms at three time-frequency resolutions to capture both fine call structure and coarse song patterns |
+| 9 | **Iterative Pseudo-Labeling with Uncertainty Filtering** | Power-scaled soft pseudo-labels across 3 iterations, filtered by MC Dropout confidence |
+| 10 | **Stochastic Weight Averaging (SWA) + EMA** | SWA from epoch 37 onward combined with EMA decay (0.999) for better generalization |
 
 ---
 
-## Exact Training Parameters (from paper Appendix B)
+## Architecture
+
+### Backbone Ensemble
+- **ECA-NFNet-L0** — RAdam optimizer, lr=1e-3
+- **EfficientNetV2-S (ImageNet-21k)** — AdamW optimizer, lr=1e-4
+
+Both backbones share:
+- GeM pooling → 512-channel classification head
+- Dropout 0.25 (post-backbone) + 0.5 (post-hidden)
+- Cosine LR schedule to 1e-6, no warmup
+- 50 epochs supervised, 20 epochs pseudo-label stage
+
+### Training Strategy
+- 5-fold cross-validation on merged BirdCLEF 2021–2025 dataset (~80K recordings)
+- Balanced sampler with per-class frequency weighting
+- MixUp augmentation (audio domain, p=0.5)
+- Background noise injection from training soundscapes
+- Gradient accumulation (effective batch size = 64)
+- bf16-mixed precision training
+
+---
+
+## Exact Training Parameters
 
 | Parameter | Value |
-|---|---|
+|-----------|-------|
 | Sample rate | 32,000 Hz |
 | n_mels | 128 |
 | f_min | 20 Hz |
@@ -55,16 +69,17 @@ passive acoustic monitoring soundscapes recorded in Colombia's Magdalena Valley.
 | hop_length | 512 |
 | top_db | 80 |
 | amin | 1e-10 |
-| Batch size | 64 |
-| Epochs | 50 |
+| Effective batch size | 64 (4 × 16 grad accum) |
+| Epochs (supervised) | 50 |
+| Epochs (pseudo) | 20 |
 | NFNet LR | 1e-3 (RAdam) |
-| EffNetV2 LR | 1e-4 (AdamW, ε=1e-8, β=(0.9,0.999)) |
+| EffNetV2 LR | 1e-4 (AdamW, ε=1e-8, β=(0.9, 0.999)) |
 | Min LR | 1e-6 (cosine schedule, no warmup) |
-| Dropout | 0.25 (post-CNN), 0.5 (post-hidden) |
+| Dropout | 0.25 (post-backbone), 0.5 (post-hidden) |
 | Label smoothing α | 0.05 |
-| MixUp | p=0.5, audio domain, max label |
-| Background noise | p=0.5, soundscape + ESC-50 |
-| Classification head | hidden=512 channels, ReLU |
+| MixUp | p=0.5, audio domain |
+| SWA start | 75% of training |
+| EMA decay | 0.999 |
 
 ---
 
@@ -74,58 +89,101 @@ passive acoustic monitoring soundscapes recorded in Colombia's Magdalena Valley.
 birdclef_combined/
 ├── code_base/
 │   ├── models/
-│   │   ├── backbone.py           # ECA-NFNet-L0, EfficientNetV2-S, B3/B4, RegNetY
-│   │   ├── classification_head.py # 512-hidden GeM head (exact 2nd place architecture)
-│   │   ├── sed_model.py          # SED with attention pooling (1st place)
-│   │   └── ensemble.py           # 15-model ensemble + TTA + TopN postprocessing
+│   │   ├── backbone.py               # ECA-NFNet-L0, EfficientNetV2-S via timm
+│   │   ├── train_module.py           # PyTorch Lightning training module
+│   │   ├── causal_disentangle.py     # Novel #3: Causal feature disentanglement
+│   │   ├── domain_adaptation.py      # Novel #1: DANN gradient reversal
+│   │   ├── noise_conditioning.py     # Novel #5: FiLM noise conditioning
+│   │   ├── prototypical_head.py      # Novel #4: Prototypical rare-species head
+│   │   ├── cooccurrence_graph.py     # Species co-occurrence graph
+│   │   └── ensemble.py               # Multi-backbone ensemble inference
 │   ├── datasets/
-│   │   ├── audio_dataset.py      # HDF5 + raw audio, balanced sampler (γ=-0.5, -1)
-│   │   ├── soundscape_dataset.py # Unlabeled soundscape sliding window
-│   │   └── pseudo_dataset.py     # Combined labeled + pseudo-labeled dataset
+│   │   └── audio_dataset.py          # Audio loading, balanced sampler, pseudo-label mixing
 │   ├── losses/
-│   │   ├── focal_bce.py          # FocalBCE + BCE combined loss
-│   │   └── soft_auc.py           # Differentiable pairwise AUC (1st place)
+│   │   ├── focal_bce.py              # FocalBCE + BCE combined loss
+│   │   ├── taxonomy_loss.py          # Novel #7: Taxonomy-aware hierarchical loss
+│   │   └── temporal_consistency.py   # Novel #6: Temporal consistency regularization
 │   ├── augmentations/
-│   │   ├── audio_aug.py          # MixUp (audio), BackgroundNoise (ESC-50/soundscape)
-│   │   ├── spec_aug.py           # SpecAugment, RandomFiltering
-│   │   └── nnaudio_mel.py        # nnAudio GPU mel extractor (exact params from paper)
-│   ├── utils/
-│   │   ├── hdf5_utils.py         # Audio→HDF5 with byte-wise access
-│   │   ├── pseudo_labels.py      # Power transform, filtering, OOF strategy
-│   │   ├── postprocessing.py     # TopN postprocessing (exact 2nd place method)
-│   │   └── metrics.py            # Padded macro ROC-AUC
-│   └── nn_blocks/
-│       └── gem_pooling.py        # GeM pooling [Radenović et al.]
+│   │   ├── audio_aug.py              # MixUp, background noise injection
+│   │   ├── multi_resolution_mel.py   # Novel #8: Multi-resolution spectral fusion
+│   │   └── nnaudio_mel.py            # GPU mel spectrogram extraction
+│   └── utils/
+│       ├── calibration.py            # Temperature scaling + threshold optimization
+│       ├── hdf5_utils.py             # HDF5 audio cache utilities
+│       ├── pseudo_labels.py          # Power-scaled pseudo-label generation
+│       ├── postprocessing.py         # Segment-level post-processing
+│       └── uncertainty.py            # Novel #2: MC Dropout uncertainty estimation
 ├── scripts/
-│   ├── precompute_features.py    # Audio→HDF5 (--use_torchaudio for MP3)
-│   ├── main_train.py             # Full k-fold training pipeline
-│   ├── generate_pseudo_labels.py # Teacher inference → pseudo-label selection
-│   ├── main_inference.py         # Eval + ONNX + OpenVINO FP16 export
-│   ├── create_pretrain_backbone.py # Extract backbone from pretrain checkpoint
-│   └── download_data.py          # Kaggle API downloader
+│   ├── run_full_pipeline.py          # One-command automated training pipeline
+│   ├── main_train.py                 # Single fold training entry point
+│   ├── generate_pseudo_labels.py     # Teacher inference → pseudo-label parquet
+│   ├── merge_datasets.py             # Merge BirdCLEF 2021–2025 into unified dataset
+│   ├── calibrate_and_threshold.py    # Post-training calibration
+│   ├── build_taxonomy_map.py         # Build species → taxon JSON mapping
+│   ├── build_prototypes.py           # Build prototype vectors for rare species
+│   ├── main_inference.py             # Inference + submission generation
+│   └── precompute_features.py        # Audio → HDF5 pre-computation
 ├── configs/
+│   ├── species_to_taxon.json         # 206-species taxonomic group mapping
 │   ├── train/
-│   │   ├── pretrain_eca_2025.py   # Pre-train NFNet on 819k Xeno-Canto samples
-│   │   ├── pretrain_ebs_2025.py   # Pre-train EffNetV2 on Xeno-Canto
-│   │   ├── selected_eca.py        # Final NFNet config (exact 2nd place)
-│   │   ├── selected_ebs.py        # Final EffNetV2 config (exact 2nd place)
-│   │   ├── pseudo_iter1_eca.py    # Noisy student iter 1
-│   │   ├── pseudo_iter2_ebs.py    # Noisy student iter 2
-│   │   └── insects_amphibians.py  # Specialist pipeline (1st place)
+│   │   ├── selected_eca.py           # ECA-NFNet-L0 training config
+│   │   ├── selected_ebs.py           # EfficientNetV2-S training config
+│   │   ├── insects_amphibians.py     # Specialist config for non-bird classes
+│   │   ├── pseudo_iter1_eca.py       # Pseudo-label iteration 1 config
+│   │   ├── pseudo_iter2_ebs.py       # Pseudo-label iteration 2 config
+│   │   └── pseudo_iter3_eca.py       # Pseudo-label iteration 3 config
 │   └── inference/
-│       └── ensemble_final.py      # 15-model ensemble config
-├── notebooks/
-│   ├── 01_EDA_Species_Distribution.ipynb
-│   ├── 02_Domain_Shift_Analysis.ipynb
-│   ├── 03_Pseudo_Label_Pipeline.ipynb
-│   └── 04_Ensemble_Optuna_Selection.ipynb
-├── pyproject.toml
-└── rock_that_bird.sh              # End-to-end runner
+│       └── ensemble_final.py         # Ensemble inference config
+├── setup_vast.sh                     # One-command Vast.ai cloud GPU setup
+└── pyproject.toml
 ```
 
 ---
 
-## Setup & How to Run
+## Setup & Training (Cloud — Vast.ai)
+
+The recommended way to train is on a cloud GPU instance using the automated setup script.
+
+### 1. Prepare (on your local machine)
+
+- Accept BirdCLEF dataset rules on Kaggle (2021–2025)
+- Get your Kaggle API key from kaggle.com → Settings → API → Create New Token
+- Rent an RTX 3090 instance (24 GB VRAM, 200 GB disk) on vast.ai
+
+### 2. Run the one-command setup (on the server)
+
+```bash
+git clone https://github.com/dhanushss30/major_project.git birdclef
+cd birdclef/birdclef_combined
+bash setup_vast.sh YOUR_KAGGLE_USERNAME YOUR_KAGGLE_KEY
+```
+
+This installs all dependencies, downloads BirdCLEF 2021–2025, and merges them into a unified training set.
+
+### 3. Start training
+
+```bash
+python scripts/run_full_pipeline.py \
+    --data_root   /workspace/birdclef-merged \
+    --metadata_file train_merged.csv \
+    --logdir      /workspace/logdir \
+    --gpu 0
+```
+
+The pipeline runs end-to-end without any intervention:
+- Stage 1: Supervised training (5 folds × 2 backbones)
+- Stage 2: Pseudo-label generation with MC Dropout filtering
+- Stage 3: Pseudo-label retraining (3 iterations)
+- Stage 4: Calibration and threshold optimization
+
+To resume after a crash:
+```bash
+python scripts/run_full_pipeline.py --data_root /workspace/birdclef-merged --resume
+```
+
+---
+
+## Setup & Training (Local)
 
 ### 1. Install dependencies
 
@@ -133,138 +191,30 @@ birdclef_combined/
 pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cu121
 ```
 
-> **CPU-only (no GPU):** Remove `+cu121` from the three torch lines in `requirements.txt`, then run `pip install -r requirements.txt`.
-
----
-
 ### 2. Download the data
 
-Download the BirdCLEF+ 2025 dataset from Kaggle and place it so your folder structure looks like:
+Download BirdCLEF 2025 from Kaggle and arrange as:
 
 ```
 /your/data/root/
 ├── train.csv
-├── train_audio/          # Per-species OGG clips
-├── train_soundscapes/    # Unlabeled soundscapes for pseudo-labelling
-└── test_soundscapes/     # Competition test soundscapes
+├── train_audio/
+├── train_soundscapes/
+└── test_soundscapes/
 ```
-
----
 
 ### 3. Update data paths in configs
 
-Open `configs/train/selected_eca.py` and `configs/train/selected_ebs.py` and set:
+Edit `configs/train/selected_eca.py` and `configs/train/selected_ebs.py`:
 
 ```python
 "data_root":       "/your/data/root",
 "audio_root":      "/your/data/root/train_audio",
 "soundscape_root": "/your/data/root/train_soundscapes",
-"hdf5_root":       "/your/data/hdf5",   # Where pre-computed HDF5 files will be saved
 ```
 
-Do the same in `configs/inference/ensemble_final.py`:
-
-```python
-"data_root":           "/your/data/root",
-"audio_root":          "/your/data/root/train_audio",
-"test_soundscape_dir": "/your/data/root/test_soundscapes",
-```
-
----
-
-### 4. (Recommended) Pre-compute audio to HDF5
-
-Converts raw audio to HDF5 for fast byte-wise chunk loading during training.
-Use `--use_torchaudio` for MP3 files to avoid librosa artefacts.
+### 4. Train
 
 ```bash
-cd birdclef_combined
-
-python scripts/precompute_features.py \
-    /your/data/root/train_audio \
-    /your/data/hdf5 \
-    --n_cores 8 \
-    --use_torchaudio
+python scripts/run_full_pipeline.py --data_root /your/data/root --gpu 0
 ```
-
----
-
-### 5. Stage 1 — Supervised training (clean labels)
-
-Train ECA-NFNet-L0 and EfficientNetV2-S on clean labelled data, 5-fold CV.
-
-```bash
-cd birdclef_combined
-
-# ECA-NFNet-L0  (RAdam, lr=1e-3)
-CUDA_VISIBLE_DEVICES=0 python scripts/main_train.py configs/train/selected_eca.py
-
-# EfficientNetV2-S  (AdamW, lr=1e-4)
-CUDA_VISIBLE_DEVICES=0 python scripts/main_train.py configs/train/selected_ebs.py
-```
-
-Checkpoints are saved to `logdir/<exp_name>/fold_<N>/checkpoints/best.ckpt`.
-A `checkpoint_manifest.json` is written to `logdir/<exp_name>/` when all folds finish.
-
----
-
-### 6. Generate pseudo-labels (noisy student, iteration 1)
-
-Uses the Stage 1 ECA ensemble to label the unlabelled soundscapes.
-
-```bash
-cd birdclef_combined
-
-python scripts/generate_pseudo_labels.py \
-    --checkpoint_manifest logdir/eca_nfnet_l0_noamp_64bs_5sec_BasicAug_SqrtBalancing_Radamlr1e3_CosBatchLR1e6_Epoch50_FocalBCELoss_LSF1005/checkpoint_manifest.json \
-    --soundscape_dir /your/data/root/train_soundscapes \
-    --output_dir /your/data/pseudo_labels \
-    --iteration 1 \
-    --power_alpha 0.6 \
-    --backbone eca_nfnet_l0
-```
-
-Output: `/your/data/pseudo_labels/pseudo_labels_iter1_full.parquet`
-
----
-
-### 7. Stage 2 — Pseudo-label training (noisy student)
-
-Set the `pseudo_labels_path` in `configs/train/pseudo_iter1_eca.py` to the parquet file above, then train:
-
-```bash
-CUDA_VISIBLE_DEVICES=0 python scripts/main_train.py configs/train/pseudo_iter1_eca.py
-```
-
-Repeat steps 6–7 for iterations 2 and 3 (`power_alpha` 0.5 → 0.4), using the latest
-ensemble checkpoints each time.
-
----
-
-### 8. Run inference / generate submission
-
-```bash
-cd birdclef_combined
-
-# Generate competition submission CSV
-python scripts/main_inference.py configs/inference/ensemble_final.py \
-    --mode submit \
-    --soundscape_dir /your/data/root/test_soundscapes \
-    --output submission.csv
-
-# Evaluate OOF validation AUC
-python scripts/main_inference.py configs/inference/ensemble_final.py --mode eval
-
-# Export ONNX + OpenVINO FP16 (for CPU deployment)
-python scripts/main_inference.py configs/inference/ensemble_final.py --mode export
-```
-
----
-
-## References
-
-1. Sydorskyi & Gonçalves. *Tackling Domain Shift in Bird Audio Classification via Transfer Learning and Semi-Supervised Distillation.* CLEF 2025 Working Notes.
-2. Babych. *Multi-Iterative Noisy Student Is All You Need.* BirdCLEF+ 2025 Kaggle Discussion.
-3. Cañas et al. *Overview of BirdCLEF+ 2025.* CLEF 2025.
-4. Park et al. *SpecAugment.* Interspeech 2019.
-5. Radenović et al. *Fine-tuning CNN Image Retrieval with No Human Annotation.* TPAMI 2019. (GeM pooling)

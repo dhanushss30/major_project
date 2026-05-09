@@ -406,13 +406,16 @@ class BirdCLEFModule(L.LightningModule):
         mel = self.spec_aug(mel)
 
         # ── NOVEL #5: Noise profile from soundscape buffer ────────────────
+        # FIX: removed torch.no_grad() — it was blocking gradient flow back to
+        # the noise extractor, so its weights never updated despite being in the
+        # optimizer. The docstring states FiLM is trained end-to-end with BCE/Focal,
+        # which requires gradient flow through this path.
         noise_profile = None
         if self.use_noise_conditioning and self._noise_extractor is not None:
             if self._dann_buffer is not None:
                 sc_audio_noise = self._dann_buffer.sample(audio.size(0), audio.device)
                 sc_mel_noise   = self.mel(sc_audio_noise)                  # (B, 1, n_mels, T')
-                with torch.no_grad():
-                    noise_profile = self._noise_extractor(sc_mel_noise)    # (B, noise_dim)
+                noise_profile  = self._noise_extractor(sc_mel_noise)        # (B, noise_dim)
             else:
                 # No soundscape buffer: use zeros (identity FiLM — no conditioning)
                 noise_profile = torch.zeros(

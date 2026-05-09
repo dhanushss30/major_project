@@ -67,11 +67,11 @@ config = {
     "epochs": 50,
     "limit_train_batches": 3000,  # Must match ECA — without this, epoch = ~146K steps (forever)
 
-    # ── Training ─────────────────────────────────────────────────────────
-    "batch_size":      4,    # Reduced from 8 — 4GB VRAM cannot handle 8 at fp32
-    "num_workers":     4,   # Use 4 workers; set to 0 only if Windows multiprocessing errors
-    "precision":       "bf16-mixed",  # Changed from 32-true — required for 4GB VRAM
-    "accumulate_grad": 16,  # Increased to 16 to keep effective batch = 64 (4×16=64)
+    # ── Training — tuned for RTX 4090 24GB VRAM ─────────────────────────────
+    "batch_size":      16,   # 24GB VRAM allows batch 16; was 4 for 4GB laptop
+    "num_workers":     8,    # 16 CPU cores available on server; 8 workers for fast loading
+    "precision":       "bf16-mixed",
+    "accumulate_grad": 4,    # 16×4=64 effective batch (same as before, fewer accum steps)
 
     # ── EqualBalancing: γ=-1.0 for EffNetV2 (paper §5.2) ─────────────────
     "sampler_gamma":  -1.0,

@@ -150,10 +150,10 @@ def build_config(
         # Pseudo: 20 epochs (model already warm; more epochs = overfitting pseudo noise)
         "epochs": 50 if stage == "supervised" else 20,
         "limit_train_batches": 3000,   # 3000 batches × batch_size per epoch
-        "batch_size": 4,               # 4GB VRAM safe; effective batch = 4×16 = 64
-        "num_workers": 4,
+        "batch_size": 16,              # RTX 4090 24GB; effective batch = 16×4 = 64
+        "num_workers": 8,              # 16 CPU cores on server; 8 workers for data loading
         "precision": "bf16-mixed",
-        "accumulate_grad": 16,         # gradient accumulation to reach effective batch 64
+        "accumulate_grad": 4,          # gradient accumulation to reach effective batch 64
 
         # Sampler
         "sampler_gamma": -0.5,

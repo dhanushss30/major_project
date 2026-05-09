@@ -77,11 +77,11 @@ config = {
     "epochs":              50,     # Paper uses 50 epochs (was incorrectly set to 20)
     "limit_train_batches": 3000,  # cap steps/epoch: 3000×8=24K samples vs full 183K
 
-    # ── Training setup (Appendix B) ───────────────────────────────────────
-    "batch_size":        4,    # Reduced from 8 for 4GB VRAM safety
-    "num_workers":       4,   # Use 4 workers; set to 0 only if Windows multiprocessing errors
-    "precision":         "bf16-mixed", # bf16 stable with NFNet; no fp16 overflow
-    "accumulate_grad":   16,  # Increased to 16 to keep effective batch = 64 (4×16=64)
+    # ── Training setup — tuned for RTX 4090 24GB VRAM ───────────────────────
+    "batch_size":        16,   # 24GB VRAM allows batch 16; was 4 for 4GB laptop
+    "num_workers":       8,    # 16 CPU cores available on server; 8 workers for fast loading
+    "precision":         "bf16-mixed",
+    "accumulate_grad":   4,    # 16×4=64 effective batch (same as before, fewer accum steps)
 
     # ── Balanced sampler: γ=-0.5 for NFNet (paper Eq. 1, §5.2) ───────────
     "sampler_gamma":     -0.5,        # SqrtBalancing

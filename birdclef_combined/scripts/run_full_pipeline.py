@@ -169,7 +169,7 @@ def build_config(
         # EMA + SWA
         "use_ema": True,
         "ema_decay": 0.999,
-        "use_swa": True,
+        "use_swa": False,   # Disabled: deepcopy conflict with custom modules
         "swa_lr": 1e-6,
         "swa_start_frac": 0.75,
 

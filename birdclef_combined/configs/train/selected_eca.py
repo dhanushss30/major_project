@@ -149,7 +149,7 @@ config = {
     "causal_warmup_steps":     1000,   # Ramp up causal losses over this many steps
 
     # ── SWA (Stochastic Weight Averaging) — from 2nd place ─────────────
-    "use_swa":          True,
+    "use_swa":          False,  # Disabled: deepcopy conflict with custom modules
     "swa_lr":           1e-6,      # SWA learning rate (= min_lr)
     "swa_start_frac":   0.75,      # Start SWA at 75% of training
 

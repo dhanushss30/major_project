@@ -133,7 +133,7 @@ config = {
     "causal_warmup_steps":     1000,
 
     # ── SWA ──────────────────────────────────────────────────────────────
-    "use_swa":          True,
+    "use_swa":          False,  # Disabled: deepcopy conflict with custom modules
     "swa_lr":           1e-6,
     "swa_start_frac":   0.75,
 

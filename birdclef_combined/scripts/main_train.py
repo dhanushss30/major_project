@@ -284,7 +284,9 @@ def train_fold(cfg: dict, df: pd.DataFrame, label_to_idx: dict, fold: int, logdi
         if not species_to_taxon:
             taxon_json = cfg.get("species_to_taxon_path") or str(PROJECT_ROOT / "configs" / "species_to_taxon.json")
             if Path(taxon_json).exists():
-                with open(taxon_json) as f:
+                # utf-8-sig tolerates the byte-order mark (BOM) some Windows
+                # editors prepend; plain utf-8 fails to parse those files.
+                with open(taxon_json, encoding="utf-8-sig") as f:
                     species_to_taxon = json.load(f)
                 logger.info(f"Loaded taxonomy mapping: {len(species_to_taxon)} species from {taxon_json}")
             else:

@@ -200,7 +200,14 @@ class BirdCLEFDataset(Dataset):
                     strategy = self.chunk_strategy if self.is_train else "random",
                 )
 
-        # Fallback: raw audio file
+        # Multi-year support: each row may have its own audio_root (prior year data)
+        row_audio_root = row.get("audio_root", None)
+        if row_audio_root and isinstance(row_audio_root, str):
+            audio_path = Path(row_audio_root) / filename
+            if audio_path.exists():
+                return self._load_raw_audio(str(audio_path))
+
+        # Fallback: global audio_root from config
         if self.audio_root is not None:
             audio_path = self.audio_root / filename
             if audio_path.exists():
@@ -498,6 +505,10 @@ class PseudoLabelDataset(Dataset):
             labeled_idx = idx % len(self.labeled_ds)
             item = self.labeled_ds[labeled_idx]
             item["start_sec"] = torch.tensor(0.0)
+            # BUG FIX: DataLoader collation requires all items in a batch to have
+            # the same keys. Labeled items need this key so batches with pseudo
+            # items don't fail. Weight=1.0 means "fully trust this sample".
+            item["uncertainty_weight"] = torch.tensor(1.0, dtype=torch.float32)
             return item
 
         pseudo_idx = idx - self.n_labeled
@@ -531,10 +542,14 @@ class PseudoLabelDataset(Dataset):
         else:
             label = np.zeros(self.labeled_ds.n_classes, dtype=np.float32)
 
+        # Novel #9: uncertainty weight (from MC Dropout filtering)
+        unc_weight = float(row.get("uncertainty_weight", 1.0))
+
         return {
-            "audio":     torch.tensor(audio, dtype=torch.float32),
-            "label":     torch.tensor(label, dtype=torch.float32),
-            "idx":       self._total - len(self.pseudo_df) + pseudo_idx,
-            "filename":  str(row.get("filename", "")),
-            "start_sec": torch.tensor(start_sec),
+            "audio":              torch.tensor(audio, dtype=torch.float32),
+            "label":              torch.tensor(label, dtype=torch.float32),
+            "idx":                self._total - len(self.pseudo_df) + pseudo_idx,
+            "filename":           str(row.get("filename", "")),
+            "start_sec":          torch.tensor(start_sec),
+            "uncertainty_weight": torch.tensor(unc_weight, dtype=torch.float32),
         }

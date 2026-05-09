@@ -23,12 +23,14 @@ config = {
     ),
     "stage": "supervised",   # or "pseudo" when pseudo_labels_path is set
 
-    # ── Data paths — UPDATE THESE ─────────────────────────────────────────
-    "data_root":         "D:/birdclef_data/birdclef-2025",
-    "metadata_file":     "train.csv",
-    "audio_root":        "D:/birdclef_data/birdclef-2025/train_audio",
-    "hdf5_root":         "D:/birdclef_data/birdclef_hdf5",  # Pre-decoded audio cache
-    "soundscape_root":   "D:/birdclef_data/birdclef-2025/train_soundscapes",
+    # ── Data paths (Vast.ai /workspace) ──────────────────────────────────
+    # Use merged dataset if available (setup_vast.sh creates it),
+    # else falls back to 2025-only data. Run merge_datasets.py to create it.
+    "data_root":         "/workspace/birdclef-merged",   # merged 2021-2025
+    "metadata_file":     "train_merged.csv",              # unified metadata
+    "audio_root":        "/workspace/birdclef-merged/train_audio",
+    "hdf5_root":         None,   # Disabled — reads raw audio directly
+    "soundscape_root":   "/workspace/birdclef-2025/train_soundscapes",
     "pseudo_labels_path": None,   # Set to parquet path for Stage 2
 
     # ── Cross-validation ──────────────────────────────────────────────────
@@ -134,6 +136,17 @@ config = {
     # Enables ImageNet 3-channel pretrained weights.
     "use_multi_res_mel":  False,   # Set True to enable 3-channel mel
     "multi_res_mode":     "stack", # "stack" (3-ch) or "attention" (weighted 1-ch)
+
+    # ── NOVEL #10: Causal Feature Disentanglement ────────────────────────
+    # Decomposes features into causal (bird vocalization) vs spurious (environment).
+    # Uses counterfactual invariance + HSIC independence penalty.
+    "use_causal":              True,
+    "causal_dim":              768,    # Dim of causal subspace
+    "spurious_dim":            512,    # Dim of spurious subspace
+    "causal_dropout":          0.1,
+    "causal_lambda_inv":       1.0,    # Counterfactual invariance weight
+    "causal_lambda_hsic":      0.1,    # HSIC independence weight
+    "causal_warmup_steps":     1000,   # Ramp up causal losses over this many steps
 
     # ── SWA (Stochastic Weight Averaging) — from 2nd place ─────────────
     "use_swa":          True,

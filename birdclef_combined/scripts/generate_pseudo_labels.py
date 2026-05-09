@@ -113,6 +113,13 @@ def main():
     p.add_argument("--num_workers",         type=int,   default=0,
                    help="0 is safest on Windows; use 2-4 on Linux")
     p.add_argument("--sr",                  type=int,   default=32_000)
+    # Novel #9: MC Dropout Uncertainty
+    p.add_argument("--use_mc_dropout",      action="store_true",
+                   help="Enable MC Dropout uncertainty filtering (Novel #9)")
+    p.add_argument("--n_mc_samples",        type=int,   default=8,
+                   help="Number of MC forward passes per model (T)")
+    p.add_argument("--mc_min_confidence",   type=float, default=0.3,
+                   help="Reject pseudo-labels below this confidence score")
     args = p.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -169,6 +176,9 @@ def main():
             class_prob_threshold = args.class_prob_threshold,
             power_alpha          = args.power_alpha,
             output_path          = output_path,
+            use_mc_dropout       = args.use_mc_dropout,
+            n_mc_samples         = args.n_mc_samples,
+            mc_min_confidence    = args.mc_min_confidence,
         )
     else:  # OOF
         # Build fold→models mapping
@@ -213,6 +223,9 @@ def main():
         "power_alpha":          args.power_alpha,
         "max_prob_threshold":   args.max_prob_threshold,
         "class_prob_threshold": args.class_prob_threshold,
+        "use_mc_dropout":       args.use_mc_dropout,
+        "n_mc_samples":         args.n_mc_samples if args.use_mc_dropout else None,
+        "mc_min_confidence":    args.mc_min_confidence if args.use_mc_dropout else None,
         "output_path":          str(output_path),
     }
     with open(output_dir / f"pseudo_summary_iter{args.iteration}_{args.mode}.json", "w") as f:

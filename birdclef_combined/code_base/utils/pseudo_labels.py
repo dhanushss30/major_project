@@ -40,6 +40,13 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
+from code_base.utils.uncertainty import (
+    enable_mc_dropout,
+    disable_mc_dropout,
+    compute_uncertainty_weights,
+    filter_pseudo_labels_by_uncertainty,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -160,6 +167,74 @@ class PseudoLabelGenerator:
 
         return np.concatenate(all_probs, axis=0)   # (N, C)
 
+    @torch.no_grad()
+    def _run_mc_dropout_inference(
+        self, model: nn.Module, n_mc_samples: int = 8
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        MC Dropout inference (Novel #9): run T forward passes with dropout enabled.
+
+        Returns:
+            mean_probs: (N, C) — mean prediction across T passes
+            variance:   (N, C) — per-class predictive variance
+            confidence: (N,)   — 1 - normalized_entropy (sample-level)
+        """
+        model = model.to(self.device).eval()
+        enable_mc_dropout(model)
+        self.mel = self.mel.to(self.device).eval()
+
+        loader = DataLoader(
+            self.ds,
+            batch_size  = self.batch_size,
+            shuffle     = False,
+            num_workers = self.num_workers,
+            pin_memory  = True,
+        )
+
+        all_means = []
+        all_vars = []
+        all_conf = []
+
+        for batch in tqdm(loader, desc="MC Dropout Inference", leave=False):
+            audio = batch["audio"].to(self.device)
+            mel = self.mel(audio)
+
+            preds = []
+            for _ in range(n_mc_samples):
+                if hasattr(model, "get_logits"):
+                    logits = model.get_logits(mel)
+                    prob = torch.sigmoid(logits)
+                elif hasattr(model, "get_probabilities"):
+                    prob = model.get_probabilities(mel)
+                else:
+                    prob = torch.sigmoid(model(mel))
+                preds.append(prob)
+
+            stacked = torch.stack(preds, dim=0)  # (T, B, C)
+            mean = stacked.mean(dim=0)           # (B, C)
+            var = stacked.var(dim=0)             # (B, C)
+
+            eps = 1e-7
+            binary_entropy = -(
+                mean * torch.log(mean + eps) +
+                (1 - mean) * torch.log(1 - mean + eps)
+            )
+            entropy = binary_entropy.sum(dim=-1)
+            max_entropy = mean.shape[-1] * np.log(2)
+            confidence = 1.0 - (entropy / max_entropy)
+
+            all_means.append(mean.cpu().numpy())
+            all_vars.append(var.cpu().numpy())
+            all_conf.append(confidence.cpu().numpy())
+
+        disable_mc_dropout(model)
+
+        return (
+            np.concatenate(all_means, axis=0),
+            np.concatenate(all_vars, axis=0),
+            np.concatenate(all_conf, axis=0),
+        )
+
     def generate(
         self,
         iteration:              int   = 1,
@@ -167,6 +242,9 @@ class PseudoLabelGenerator:
         class_prob_threshold:   float = 0.1,    # Paper: 0.1
         power_alpha:            float = 1.0,    # 1.0 = no transform; <1 = 1st place
         output_path:            Optional[Union[str, Path]] = None,
+        use_mc_dropout:         bool  = False,  # Novel #9
+        n_mc_samples:           int   = 8,
+        mc_min_confidence:      float = 0.3,
     ) -> pd.DataFrame:
         """
         Generate pseudo-labels from ensemble prediction.
@@ -177,23 +255,50 @@ class PseudoLabelGenerator:
             class_prob_threshold    : Zero out class probs below this
             power_alpha             : Power transform exponent (1st place)
             output_path             : Save parquet here if provided
+            use_mc_dropout          : Enable MC Dropout uncertainty filtering (Novel #9)
+            n_mc_samples            : Number of MC forward passes per model (T)
+            mc_min_confidence       : Reject pseudo-labels below this confidence
 
         Returns:
             DataFrame with columns:
                 filename, start_sec, soft_labels (list of C floats),
-                max_confidence, iteration
+                max_confidence, iteration, [uncertainty_weight]
         """
         logger.info(f"Generating pseudo-labels (iteration {iteration}) "
                     f"using {len(self.models)} models...")
 
-        # Average ensemble predictions
+        if use_mc_dropout:
+            logger.info(f"MC Dropout enabled: T={n_mc_samples}, "
+                        f"min_confidence={mc_min_confidence}")
+
+        # Ensemble predictions (with or without MC Dropout)
         all_model_probs = []
+        all_model_vars = []
+        all_model_conf = []
+
         for model in self.models:
-            probs = self._run_inference(model)
-            all_model_probs.append(probs)
+            if use_mc_dropout:
+                mean_probs, variance, confidence = self._run_mc_dropout_inference(
+                    model, n_mc_samples=n_mc_samples
+                )
+                all_model_probs.append(mean_probs)
+                all_model_vars.append(variance)
+                all_model_conf.append(confidence)
+            else:
+                probs = self._run_inference(model)
+                all_model_probs.append(probs)
 
         ensemble_probs = np.mean(all_model_probs, axis=0)   # (N, C)
         logger.info(f"Ensemble shape: {ensemble_probs.shape}")
+
+        # Aggregate uncertainty across models
+        ensemble_variance = None
+        ensemble_confidence = None
+        if use_mc_dropout:
+            ensemble_variance = np.mean(all_model_vars, axis=0)    # (N, C)
+            ensemble_confidence = np.mean(all_model_conf, axis=0)  # (N,)
+            logger.info(f"Mean confidence: {ensemble_confidence.mean():.3f}, "
+                        f"std: {ensemble_confidence.std():.3f}")
 
         # Apply power transform (1st place)
         if power_alpha != 1.0:
@@ -213,6 +318,23 @@ class PseudoLabelGenerator:
             f"({100*n_kept/max(len(keep_mask),1):.1f}%)"
         )
 
+        # Novel #9: uncertainty-based filtering on top of threshold selection
+        sample_weights = np.ones(len(keep_mask), dtype=np.float32)
+        if use_mc_dropout and ensemble_confidence is not None:
+            soft_labels, unc_keep, sample_weights = filter_pseudo_labels_by_uncertainty(
+                probs=soft_labels,
+                confidence=ensemble_confidence,
+                min_confidence=mc_min_confidence,
+                per_class_variance=ensemble_variance,
+                variance_percentile=80.0,
+            )
+            keep_mask = keep_mask & unc_keep
+            n_after_unc = keep_mask.sum()
+            logger.info(
+                f"After uncertainty filtering: {n_after_unc:,}/{n_kept:,} "
+                f"({100*n_after_unc/max(n_kept,1):.1f}% of threshold-passed)"
+            )
+
         # Collect metadata directly from dataset index (no audio loading)
         filenames  = [str(fpath.name)    for fpath, _, _       in self.ds.index]
         start_secs = [float(start_sec)   for _,     _, start_sec in self.ds.index]
@@ -226,6 +348,11 @@ class PseudoLabelGenerator:
             "max_confidence": [float(ensemble_probs[i].max()) for i in idx_arr],
             "iteration":      iteration,
         })
+
+        if use_mc_dropout:
+            pseudo_df["uncertainty_weight"] = [
+                float(sample_weights[i]) for i in idx_arr
+            ]
 
         # Deduplicate: keep max-confidence chunk for each (file, start_sec)
         pseudo_df = pseudo_df.sort_values("max_confidence", ascending=False)

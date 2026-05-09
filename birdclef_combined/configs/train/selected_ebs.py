@@ -19,12 +19,12 @@ config = {
     ),
     "stage": "supervised",
 
-    # ── Data ─────────────────────────────────────────────────────────────
-    "data_root":          "D:/birdclef_data/birdclef-2025",
-    "metadata_file":      "train.csv",
-    "audio_root":         "D:/birdclef_data/birdclef-2025/train_audio",
+    # ── Data (Vast.ai /workspace) ─────────────────────────────────────────
+    "data_root":          "/workspace/birdclef-merged",   # merged 2021-2025
+    "metadata_file":      "train_merged.csv",
+    "audio_root":         "/workspace/birdclef-merged/train_audio",
     "hdf5_root":          None,   # Disabled — reads raw audio directly
-    "soundscape_root":    "D:/birdclef_data/birdclef-2025/train_soundscapes",
+    "soundscape_root":    "/workspace/birdclef-2025/train_soundscapes",
     "pseudo_labels_path": None,
     "n_folds": 5,
     "seed":    42,
@@ -122,6 +122,15 @@ config = {
     # ── NOVEL #8: Multi-Resolution Mel ──────────────────────────────────
     "use_multi_res_mel":  False,
     "multi_res_mode":     "stack",
+
+    # ── NOVEL #10: Causal Feature Disentanglement ────────────────────────
+    "use_causal":              True,
+    "causal_dim":              768,
+    "spurious_dim":            512,
+    "causal_dropout":          0.1,
+    "causal_lambda_inv":       1.0,
+    "causal_lambda_hsic":      0.1,
+    "causal_warmup_steps":     1000,
 
     # ── SWA ──────────────────────────────────────────────────────────────
     "use_swa":          True,

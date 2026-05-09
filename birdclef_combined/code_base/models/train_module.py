@@ -25,8 +25,16 @@ try:
     from lightning.pytorch.utilities.types import STEP_OUTPUT
 except ImportError:
     import pytorch_lightning as L
+    try:
+        from pytorch_lightning.utilities.types import STEP_OUTPUT
+    except ImportError:
+        STEP_OUTPUT = dict
 
 from .backbone import BirdCLEFModel
+from .causal_disentangle import (
+    CausalFeatureDisentangler, CausalClassificationHead,
+    CausalDisentanglementLoss, create_counterfactual_batch,
+)
 from .domain_adaptation import (
     DomainClassifier, DomainAdaptationLoss,
     SoundscapeAudioBuffer, compute_dann_lambda,
@@ -258,6 +266,42 @@ class BirdCLEFModule(L.LightningModule):
                        f"consistency={cfg.get('taxonomy_consistency_weight', 0.1)})")
         # ─────────────────────────────────────────────────────────────────
 
+        # ── NOVEL #10: Causal Feature Disentanglement ─────────────────────
+        self.use_causal = cfg.get("use_causal", False)
+        self._causal_disentangler = None
+        self._causal_head         = None
+        self._causal_loss         = None
+
+        if self.use_causal:
+            from .backbone import BACKBONE_REGISTRY
+            feat_dim = BACKBONE_REGISTRY.get(cfg["backbone"], (None, 1280))[1]
+            causal_dim = cfg.get("causal_dim", 768)
+
+            self._causal_disentangler = CausalFeatureDisentangler(
+                feat_dim     = feat_dim,
+                causal_dim   = causal_dim,
+                spurious_dim = cfg.get("spurious_dim", 512),
+                dropout      = cfg.get("causal_dropout", 0.1),
+            )
+            self._causal_head = CausalClassificationHead(
+                causal_dim = causal_dim,
+                n_classes  = cfg.get("n_classes", 206),
+                hidden_dim = cfg.get("hidden_dim", 512),
+                dropout    = cfg.get("dropout2", 0.5),
+            )
+            self._causal_loss = CausalDisentanglementLoss(
+                lambda_invariance = cfg.get("causal_lambda_inv", 1.0),
+                lambda_hsic       = cfg.get("causal_lambda_hsic", 0.1),
+                warmup_steps      = cfg.get("causal_warmup_steps", 1000),
+            )
+            logger.info(
+                f"Causal Disentanglement: ENABLED "
+                f"(causal_dim={causal_dim}, "
+                f"λ_inv={cfg.get('causal_lambda_inv', 1.0)}, "
+                f"λ_hsic={cfg.get('causal_lambda_hsic', 0.1)})"
+            )
+        # ─────────────────────────────────────────────────────────────────
+
         # EMA
         self.use_ema    = cfg.get("use_ema", True)
         self.ema_decay  = cfg.get("ema_decay", 0.999)
@@ -388,6 +432,11 @@ class BirdCLEFModule(L.LightningModule):
         # Species classification loss (BCE + Focal + optional SoftAUC)
         loss = self.loss_fn(logits, labels)
 
+        # Novel #9: apply MC Dropout uncertainty weights for pseudo-labeled samples
+        unc_weights = batch.get("uncertainty_weight", None)
+        if unc_weights is not None and unc_weights.mean() < 1.0:
+            loss = loss * unc_weights.mean()
+
         # ── NOVEL: DANN Domain Adaptation (Contribution #1) ───────────────
         if self.use_dann and self._domain_clf is not None and self._dann_buffer is not None:
             # Compute current DANN λ based on training progress
@@ -469,6 +518,40 @@ class BirdCLEFModule(L.LightningModule):
             if batch_idx % 100 == 0:
                 self.log("train/taxonomy_loss", taxonomy_loss,
                          on_step=True, prog_bar=False)
+        # ─────────────────────────────────────────────────────────────────
+
+        # ── NOVEL #10: Causal Feature Disentanglement ────────────────────
+        if self.use_causal and self._causal_disentangler is not None:
+            f_causal, f_spurious = self._causal_disentangler(features)
+
+            # Causal classification (auxiliary signal — ensures f_causal is discriminative)
+            causal_logits = self._causal_head(f_causal)
+            causal_cls_loss = self.loss_fn(causal_logits, labels)
+            loss = loss + 0.5 * causal_cls_loss
+
+            # Counterfactual invariance: same bird, different background
+            # Re-use the DANN buffer for noise (if available)
+            f_causal_cf = None
+            if self._dann_buffer is not None:
+                noise_bank = self._dann_buffer.sample(
+                    min(32, audio.size(0)), audio.device
+                )
+                audio_cf = create_counterfactual_batch(
+                    audio, noise_bank.unsqueeze(0).expand(audio.size(0), -1)
+                    if noise_bank.dim() == 1 else noise_bank
+                )
+                mel_cf = self.mel(audio_cf)
+                features_cf = self.model.extract_features(mel_cf)
+                f_causal_cf, _ = self._causal_disentangler(features_cf)
+
+            causal_loss, causal_logs = self._causal_loss(
+                f_causal, f_spurious, f_causal_cf
+            )
+            loss = loss + causal_loss
+
+            if batch_idx % 100 == 0:
+                for k, v in causal_logs.items():
+                    self.log(f"train/{k}", v, on_step=True, prog_bar=False)
         # ─────────────────────────────────────────────────────────────────
 
         # EMA update
@@ -556,6 +639,17 @@ class BirdCLEFModule(L.LightningModule):
             param_groups.append(
                 {"params": self._taxonomy_head.parameters(), "lr": lr * 2.0}
             )
+
+        # BUG FIX: causal modules must be in optimizer or their weights never update
+        if self.use_causal:
+            if self._causal_disentangler is not None:
+                param_groups.append(
+                    {"params": self._causal_disentangler.parameters(), "lr": lr}
+                )
+            if self._causal_head is not None:
+                param_groups.append(
+                    {"params": self._causal_head.parameters(), "lr": lr}
+                )
 
         params = param_groups if len(param_groups) > 1 else list(self.model.parameters())
 

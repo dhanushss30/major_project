@@ -12,7 +12,7 @@ Novel Contributions (not in either winning solution):
   #3 — Per-class Calibration + Adaptive Pseudo-label Thresholds
 
 Usage:
-    # Run from birdclef_combined\ directory
+    # Run from birdclef_combined/ directory
     # First edit CONFIG section below with YOUR paths
 
     python scripts/run_pipeline.py --stage all          # Full pipeline

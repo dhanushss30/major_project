@@ -1,8 +1,50 @@
-
+# ── Virtual environments (never push — hundreds of MB) ──────────────────────
 birdclef_env/
-birdclef_combined/submission.csv
-birdclef_combined/logdir/
+.venv/
+venv/
+env/
 
+# ── Training outputs (generated on server, not needed in repo) ──────────────
+birdclef_combined/logdir/
+logdir/
+*.ckpt
+*.pt
+*.pth
+
+# ── Dataset files (downloaded on server via setup_vast.sh) ──────────────────
+*.ogg
+*.wav
+*.mp3
+*.flac
+*.h5
+*.hdf5
+*.parquet
+
+# ── Inference outputs ────────────────────────────────────────────────────────
+birdclef_combined/submission.csv
+submission.csv
+
+# ── Python bytecode ──────────────────────────────────────────────────────────
 __pycache__/
 *.pyc
 *.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+
+# ── Log files ────────────────────────────────────────────────────────────────
+*.log
+hdf5_log.txt
+train_log.txt
+pipeline.log
+nohup.out
+
+# ── IDE and OS files ─────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.DS_Store
+Thumbs.db
+
+# ── Claude Code settings (local only, never push) ───────────────────────────
+.claude/

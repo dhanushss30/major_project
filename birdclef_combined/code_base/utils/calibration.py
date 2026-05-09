@@ -137,8 +137,11 @@ class PerClassTemperatureScaler(nn.Module):
 
             for _ in range(n_iters):
                 T_clamped = T_c.clamp(min=0.01, max=10.0)
-                probs     = torch.sigmoid(logits_c / T_clamped)
-                loss      = F.binary_cross_entropy(probs, targets_c)
+                # Use logit-space BCE to avoid log(0) when sigmoid saturates
+                # (sigmoid(x) can be exactly 0.0 or 1.0 in float32 for |x|>88)
+                loss      = F.binary_cross_entropy_with_logits(
+                    logits_c / T_clamped, targets_c
+                )
                 opt.zero_grad()
                 loss.backward()
                 opt.step()

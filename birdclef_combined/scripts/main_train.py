@@ -57,6 +57,10 @@ logger = logging.getLogger(__name__)
 # ─── Config loader ────────────────────────────────────────────────────────
 
 def load_config(path: str) -> dict:
+    """Load config from a .py file (defines `config` dict) or a .json file."""
+    if path.endswith(".json"):
+        with open(path) as f:
+            return json.load(f)
     spec   = importlib.util.spec_from_file_location("cfg", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -290,6 +294,18 @@ def train_fold(cfg: dict, df: pd.DataFrame, label_to_idx: dict, fold: int, logdi
                 )
         model.set_taxonomy_mapper(label_to_idx, species_to_taxon)
 
+    # Initialize prototypical head rarity weights (Novel #4)
+    if cfg.get("use_prototypical", False):
+        train_df = df[df["fold"] != fold]
+        class_counts = torch.zeros(cfg.get("n_classes", 206))
+        for species, idx in label_to_idx.items():
+            count = (train_df["primary_label"] == species).sum()
+            class_counts[idx] = count
+        model.set_class_counts(class_counts)
+        logger.info(f"Prototypical rarity weights set: "
+                    f"min_count={int(class_counts.min())}, "
+                    f"max_count={int(class_counts.max())}")
+
     fold_dir = logdir / f"fold_{fold}"
 
     callbacks = [
@@ -336,7 +352,20 @@ def train_fold(cfg: dict, df: pd.DataFrame, label_to_idx: dict, fold: int, logdi
 
     trainer.fit(model, train_dl, val_dl)
     best_ckpt = callbacks[0].best_model_path
+    best_auc  = float(callbacks[0].best_model_score or 0.0)
     logger.info(f"Fold {fold} best checkpoint: {best_ckpt}")
+    logger.info(f"Fold {fold} best val AUC:    {best_auc:.4f}")
+
+    # Write results.json so the automated pipeline can read the AUC
+    results = {
+        "fold":         fold,
+        "best_val_auc": best_auc,
+        "best_ckpt":    str(best_ckpt),
+        "exp_name":     cfg.get("exp_name", ""),
+    }
+    with open(fold_dir / "results.json", "w") as f:
+        json.dump(results, f, indent=2)
+
     return best_ckpt
 
 
@@ -344,12 +373,19 @@ def train_fold(cfg: dict, df: pd.DataFrame, label_to_idx: dict, fold: int, logdi
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("config",  type=str, help="Path to config .py file")
-    parser.add_argument("--fold",  type=int, default=None, help="Train single fold")
+    parser.add_argument("config", type=str, nargs="?",
+                        help="Path to config .py or .json file")
+    parser.add_argument("--config_json", type=str, default=None,
+                        help="Alternate: path to config .json (for pipeline automation)")
+    parser.add_argument("--fold",   type=int, default=None, help="Train single fold")
     parser.add_argument("--logdir", type=str, default=None)
     args = parser.parse_args()
 
-    cfg = load_config(args.config)
+    config_path = args.config_json or args.config
+    if config_path is None:
+        parser.error("Provide a config file (positional) or --config_json")
+
+    cfg = load_config(config_path)
 
     # Load and prepare metadata
     data_root = Path(cfg["data_root"])

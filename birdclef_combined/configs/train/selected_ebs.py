@@ -133,6 +133,11 @@ config = {
     "causal_warmup_steps":     3000,   # Increased: was 1000 — ramp up more slowly
     "causal_cls_weight":       0.05,   # Reduced: was hardcoded 0.5 in train_module.py
 
+    # ── Early stopping (saves compute, never reduces AUC) ─────────────
+    "early_stopping":            True,
+    "early_stopping_patience":   10,      # epochs without improvement before stop
+    "early_stopping_min_delta":  0.0005,  # AUC improvement threshold
+
     # ── SWA ──────────────────────────────────────────────────────────────
     "use_swa":          False,  # Disabled: deepcopy conflict with custom modules
     "swa_lr":           1e-6,

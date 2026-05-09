@@ -27,12 +27,14 @@ try:
     import lightning as L
     from lightning.pytorch.callbacks import (
         ModelCheckpoint, LearningRateMonitor, RichProgressBar,
-        StochasticWeightAveraging,
+        StochasticWeightAveraging, EarlyStopping,
     )
     from lightning.pytorch.loggers import TensorBoardLogger, WandbLogger
 except ImportError:
     import pytorch_lightning as L
-    from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
+    from pytorch_lightning.callbacks import (
+        ModelCheckpoint, LearningRateMonitor, EarlyStopping,
+    )
     try:
         from pytorch_lightning.callbacks import StochasticWeightAveraging
     except ImportError:
@@ -320,6 +322,26 @@ def train_fold(cfg: dict, df: pd.DataFrame, label_to_idx: dict, fold: int, logdi
         ),
         LearningRateMonitor(logging_interval="step"),
     ]
+
+    # Early stopping: halt training when val/auc stops improving (saves compute
+    # without sacrificing AUC — best checkpoint is always preserved by ModelCheckpoint).
+    # Conservative defaults: patience=10 epochs, min_delta=0.0005 — only triggers
+    # when the model has clearly plateaued. ModelCheckpoint already saves best-3 by
+    # AUC, so this never causes AUC loss.
+    if cfg.get("early_stopping", True):
+        callbacks.append(EarlyStopping(
+            monitor   = "val/auc",
+            mode      = "max",
+            patience  = cfg.get("early_stopping_patience", 10),
+            min_delta = cfg.get("early_stopping_min_delta", 0.0005),
+            verbose   = True,
+            check_finite = True,
+        ))
+        logger.info(
+            f"EarlyStopping: ENABLED "
+            f"(patience={cfg.get('early_stopping_patience', 10)}, "
+            f"min_delta={cfg.get('early_stopping_min_delta', 0.0005)})"
+        )
 
     # SWA: average top checkpoints for better generalization (2nd place trick)
     if cfg.get("use_swa", False) and StochasticWeightAveraging is not None:

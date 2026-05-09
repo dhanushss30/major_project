@@ -280,8 +280,7 @@ def train_fold(cfg: dict, df: pd.DataFrame, label_to_idx: dict, fold: int, logdi
     if cfg.get("use_taxonomy", False):
         species_to_taxon = cfg.get("species_to_taxon", {})
         if not species_to_taxon:
-            taxon_json = cfg.get("species_to_taxon_path",
-                                 str(PROJECT_ROOT / "configs" / "species_to_taxon.json"))
+            taxon_json = cfg.get("species_to_taxon_path") or str(PROJECT_ROOT / "configs" / "species_to_taxon.json")
             if Path(taxon_json).exists():
                 with open(taxon_json) as f:
                     species_to_taxon = json.load(f)

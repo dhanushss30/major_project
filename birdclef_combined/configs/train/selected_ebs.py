@@ -86,7 +86,7 @@ config = {
 
     # ── NOVEL #1: DANN Domain Adaptation ───────────────────────────────────
     "use_dann":          True,
-    "dann_lambda_max":   0.1,
+    "dann_lambda_max":   0.05,   # Reduced: was 0.1, aux must not dominate primary
     "dann_hidden_dim":   512,
 
     # ── NOVEL #4: Prototypical Head for Rare Species ───────────────────
@@ -94,7 +94,7 @@ config = {
     "proto_temperature":   0.1,
     "proto_margin":        0.3,
     "proto_rare_thr":      0.2,
-    "proto_loss_weight":   0.1,
+    "proto_loss_weight":   0.05,  # Reduced: was 0.1
     "proto_half_life":     50,
     "proto_max_weight":    0.5,
     "prototypes_path":     None,
@@ -113,9 +113,9 @@ config = {
     # ── NOVEL #7: Taxonomy-Aware Hierarchical Loss ──────────────────────
     "use_taxonomy":                  True,
     "taxonomy_hidden_dim":           128,
-    "taxonomy_aux_weight":           0.1,
-    "taxonomy_consistency_weight":   0.05,
-    "taxonomy_confusion_weight":     0.02,
+    "taxonomy_aux_weight":           0.05,   # Reduced: was 0.1
+    "taxonomy_consistency_weight":   0.02,   # Reduced: was 0.05
+    "taxonomy_confusion_weight":     0.01,   # Reduced: was 0.02
     "species_to_taxon":              {},     # Auto-loaded from species_to_taxon_path if empty
     "species_to_taxon_path":         None,   # Path to JSON; defaults to configs/species_to_taxon.json
 
@@ -128,9 +128,9 @@ config = {
     "causal_dim":              768,
     "spurious_dim":            512,
     "causal_dropout":          0.1,
-    "causal_lambda_inv":       1.0,
-    "causal_lambda_hsic":      0.1,
-    "causal_warmup_steps":     1000,
+    "causal_lambda_inv":       0.02,   # Reduced: was 1.0 — this was the main culprit (50x too large)
+    "causal_lambda_hsic":      0.02,   # Reduced: was 0.1
+    "causal_warmup_steps":     3000,   # Increased: was 1000 — ramp up more slowly
 
     # ── SWA ──────────────────────────────────────────────────────────────
     "use_swa":          False,  # Disabled: deepcopy conflict with custom modules

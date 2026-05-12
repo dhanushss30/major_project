@@ -150,6 +150,13 @@ class BirdCLEFModule(L.LightningModule):
             focal_gamma   = cfg.get("focal_gamma",  2.0),
         )
 
+        # ── Aux loss warmup (epoch-level) ─────────────────────────────────
+        # Linearly ramps every auxiliary loss term from 0 → full over the first
+        # N epochs. Prevents the peak-then-collapse pattern (val/auc 0.7471
+        # ep6 → 0.581 ep16 in earlier ECA run) where aux losses overpowered
+        # BCE/Focal before the classifier had stabilized.
+        self.aux_warmup_epochs = int(cfg.get("aux_warmup_epochs", 0))
+
         # ── NOVEL: DANN Domain Adaptation (Contribution #1) ───────────────
         # Enabled when "soundscape_root" is set and "use_dann" is True
         self.use_dann      = cfg.get("use_dann", False)
@@ -360,6 +367,17 @@ class BirdCLEFModule(L.LightningModule):
         """Return EMA model if available, else main model."""
         return self._ema_model if self._ema_model is not None else self.model
 
+    def _aux_warmup_scale(self) -> float:
+        """Linear ramp ∈ [0, 1] over the first `aux_warmup_epochs` epochs.
+
+        Multiplied into every auxiliary loss term so the main BCE/Focal loss
+        gets a clean head start before aux objectives start competing. Returns
+        1.0 when `aux_warmup_epochs == 0` (warmup disabled).
+        """
+        if self.aux_warmup_epochs <= 0:
+            return 1.0
+        return min(float(self.current_epoch + 1) / self.aux_warmup_epochs, 1.0)
+
     # ── Training step ─────────────────────────────────────────────────────
 
     def training_step(
@@ -440,6 +458,12 @@ class BirdCLEFModule(L.LightningModule):
         if unc_weights is not None and unc_weights.mean() < 1.0:
             loss = loss * unc_weights.mean()
 
+        # Aux-loss epoch warmup multiplier (1.0 once warmup is complete).
+        # Applied to every auxiliary loss term below so BCE/Focal stabilizes first.
+        aux_scale = self._aux_warmup_scale()
+        if batch_idx % 100 == 0 and self.aux_warmup_epochs > 0:
+            self.log("train/aux_scale", aux_scale, on_step=True, prog_bar=False)
+
         # ── NOVEL: DANN Domain Adaptation (Contribution #1) ───────────────
         if self.use_dann and self._domain_clf is not None and self._dann_buffer is not None:
             # Compute current DANN λ based on training progress
@@ -459,7 +483,7 @@ class BirdCLEFModule(L.LightningModule):
             dom_logits_sc = self._domain_clf(sc_features)        # (B, 1) — label=1 (soundscape)
 
             domain_loss = self._domain_loss(dom_logits_xc, dom_logits_sc)
-            loss = loss + dann_lambda * domain_loss
+            loss = loss + aux_scale * dann_lambda * domain_loss
 
             if batch_idx % 100 == 0:
                 self.log("train/domain_loss", domain_loss,
@@ -486,7 +510,7 @@ class BirdCLEFModule(L.LightningModule):
                     rarity_weights = self._proto_head.rarity_weights,
                     temperature    = self._proto_head.temperature,
                 )
-                loss = loss + proto_loss
+                loss = loss + aux_scale * proto_loss
 
                 if batch_idx % 100 == 0:
                     self.log("train/proto_loss", proto_loss,
@@ -499,7 +523,7 @@ class BirdCLEFModule(L.LightningModule):
             start_secs = batch.get("start_sec", None)
             if filenames and start_secs is not None:
                 tcr_loss = self._tcr_loss(logits, filenames, start_secs)
-                loss = loss + tcr_loss
+                loss = loss + aux_scale * tcr_loss
                 if batch_idx % 100 == 0:
                     self.log("train/tcr_loss", tcr_loss,
                              on_step=True, prog_bar=False)
@@ -517,7 +541,7 @@ class BirdCLEFModule(L.LightningModule):
                 taxon_labels   = taxon_labels,
                 mapper         = self._taxonomy_mapper,
             )
-            loss = loss + taxonomy_loss
+            loss = loss + aux_scale * taxonomy_loss
             if batch_idx % 100 == 0:
                 self.log("train/taxonomy_loss", taxonomy_loss,
                          on_step=True, prog_bar=False)
@@ -530,7 +554,7 @@ class BirdCLEFModule(L.LightningModule):
             # Causal classification (auxiliary signal — ensures f_causal is discriminative)
             causal_logits = self._causal_head(f_causal)
             causal_cls_loss = self.loss_fn(causal_logits, labels)
-            loss = loss + self.cfg.get("causal_cls_weight", 0.05) * causal_cls_loss
+            loss = loss + aux_scale * self.cfg.get("causal_cls_weight", 0.05) * causal_cls_loss
 
             # Counterfactual invariance: same bird, different background
             # Re-use the DANN buffer for noise (if available)
@@ -550,7 +574,7 @@ class BirdCLEFModule(L.LightningModule):
             causal_loss, causal_logs = self._causal_loss(
                 f_causal, f_spurious, f_causal_cf
             )
-            loss = loss + causal_loss
+            loss = loss + aux_scale * causal_loss
 
             if batch_idx % 100 == 0:
                 for k, v in causal_logs.items():

@@ -45,7 +45,7 @@ except ImportError:
 # Maps config name → (timm model name, feature channels)
 BACKBONE_REGISTRY = {
     # 2nd place primary
-    "eca_nfnet_l0":            ("eca_nfnet_l0",                    1280),
+    "eca_nfnet_l0":            ("eca_nfnet_l0",                    2304),
     "tf_efficientnetv2_s":     ("tf_efficientnetv2_s.in21k",       1280),
     # 1st place
     "efficientnet_b0":         ("efficientnet_b0",                 1280),

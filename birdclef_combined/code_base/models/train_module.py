@@ -166,9 +166,9 @@ class BirdCLEFModule(L.LightningModule):
         self._domain_loss  = None
 
         if self.use_dann and cfg.get("soundscape_root"):
-            # Auto-detect feature dim from the backbone registry
-            from .backbone import BACKBONE_REGISTRY
-            feat_dim = BACKBONE_REGISTRY.get(cfg["backbone"], (None, 1280))[1]
+            # Use the auto-detected feature dim from the actual backbone, not
+            # the registry value (which can lag behind timm version changes).
+            feat_dim = self.model.feat_dim
 
             self._domain_clf  = DomainClassifier(
                 in_features = feat_dim,
@@ -255,8 +255,7 @@ class BirdCLEFModule(L.LightningModule):
         self._taxonomy_mapper = None
 
         if self.use_taxonomy:
-            from .backbone import BACKBONE_REGISTRY
-            feat_dim = BACKBONE_REGISTRY.get(cfg["backbone"], (None, 1280))[1]
+            feat_dim = self.model.feat_dim
 
             self._taxonomy_head = TaxonomyHead(
                 in_features = feat_dim,
@@ -280,8 +279,7 @@ class BirdCLEFModule(L.LightningModule):
         self._causal_loss         = None
 
         if self.use_causal:
-            from .backbone import BACKBONE_REGISTRY
-            feat_dim = BACKBONE_REGISTRY.get(cfg["backbone"], (None, 1280))[1]
+            feat_dim = self.model.feat_dim
             causal_dim = cfg.get("causal_dim", 768)
 
             self._causal_disentangler = CausalFeatureDisentangler(

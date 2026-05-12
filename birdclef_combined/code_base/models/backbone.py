@@ -151,6 +151,9 @@ class BirdCLEFModel(nn.Module):
             else:
                 feat_dim = dummy_feat.shape[-1]
         logger.info(f"Auto-detected feature dim: {feat_dim}")
+        # Exposed so train_module can size DANN/taxonomy/causal modules using
+        # the true backbone output dim, not the (sometimes-wrong) registry value.
+        self.feat_dim = feat_dim
 
         # Classification head — Novel #5 replaces standard head when enabled
         if use_sed_head:

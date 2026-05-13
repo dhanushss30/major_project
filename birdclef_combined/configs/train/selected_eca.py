@@ -24,11 +24,11 @@ config = {
     "stage": "supervised",   # or "pseudo" when pseudo_labels_path is set
 
     # ── Data paths (Vast.ai /workspace) ──────────────────────────────────
-    # Use merged dataset if available (setup_vast.sh creates it),
-    # else falls back to 2025-only data. Run merge_datasets.py to create it.
-    "data_root":         "/workspace/birdclef-merged",   # merged 2021-2025
-    "metadata_file":     "train_merged.csv",              # unified metadata
-    "audio_root":        "/workspace/birdclef-merged/train_audio",
+    # 2025-only paths (no merge step). To use merged 2021-2025, run
+    # merge_datasets.py first and switch to /workspace/birdclef-merged.
+    "data_root":         "/workspace/birdclef-2025",
+    "metadata_file":     "train.csv",
+    "audio_root":        "/workspace/birdclef-2025/train_audio",
     "hdf5_root":         None,   # Disabled — reads raw audio directly
     "soundscape_root":   "/workspace/birdclef-2025/train_soundscapes",
     "pseudo_labels_path": None,   # Set to parquet path for Stage 2

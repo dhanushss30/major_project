@@ -93,8 +93,18 @@ config = {
     "use_secondary_labels": True,         # XC secondary labels
 
     # Background noise paths (set to actual paths)
-    "bg_soundscape_paths": [],   # Prior-year soundscape paths
-    "bg_esc50_paths":      [],   # ESC-50 audio paths
+    # On Vast.ai instance these are populated by the dataset-download step.
+    "bg_soundscape_paths": [],   # Prior-year soundscape paths (BirdCLEF 2023 train_soundscapes)
+    "bg_esc50_paths":      [],   # ESC-50 audio paths (https://github.com/karolpiczak/ESC-50)
+
+    # ── Open-set negative-class training ─────────────────────────────────
+    # With probability p_negative, replace a training sample's audio with a
+    # random clip from negative_audio_dir (e.g. ESC-50) and set its label to
+    # all-zero. This teaches the model "no bird present → all sigmoids low,"
+    # which makes the inference-time max-prob threshold a real rejection
+    # signal instead of just a low-confidence proxy.
+    "negative_audio_dir":  None,   # Set to ESC-50 root on instance
+    "p_negative":          0.1,    # 10% of training samples are non-bird
 
     # ── Aux loss warmup ──────────────────────────────────────────────────
     # Disabled — only FiLM is active and it is identity-initialised, so the

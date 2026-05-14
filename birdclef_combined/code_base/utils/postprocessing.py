@@ -190,6 +190,28 @@ def padded_auc_score(
     return float(np.mean(aucs))
 
 
+def per_class_auc_score(
+    y_true:     np.ndarray,
+    y_pred:     np.ndarray,
+    fill_value: float = float("nan"),
+    min_pos:    int   = 1,
+) -> np.ndarray:
+    """Return per-class AUC as a (C,) array. Classes without positives get
+    fill_value (NaN by default so plots can skip them)."""
+    from sklearn.metrics import roc_auc_score
+    C    = y_true.shape[1]
+    aucs = np.empty(C, dtype=np.float64)
+    for c in range(C):
+        if int(y_true[:, c].sum()) < min_pos:
+            aucs[c] = fill_value
+            continue
+        try:
+            aucs[c] = float(roc_auc_score(y_true[:, c], y_pred[:, c]))
+        except Exception:
+            aucs[c] = fill_value
+    return aucs
+
+
 def aggregate_validation_predictions(
     clip_probs:   np.ndarray,
     clip_to_file: np.ndarray,

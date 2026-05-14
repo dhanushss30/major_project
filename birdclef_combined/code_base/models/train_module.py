@@ -14,6 +14,7 @@ SpecAugment + RandomFiltering applied in spectrogram domain.
 """
 
 import logging
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -200,6 +201,29 @@ class BirdCLEFModule(L.LightningModule):
             self._domain_loss = DomainAdaptationLoss()
             logger.info("DANN domain adaptation: ENABLED "
                        f"(lambda_max={self.dann_lambda})")
+        # ─────────────────────────────────────────────────────────────────
+
+        # ── Open-set negative buffer (for "not a bird" rejection signal) ──
+        # On each training step, p_negative fraction of the batch has its
+        # audio replaced with a random clip from negative_audio_dir (typically
+        # ESC-50) and its label zeroed out. The model learns to keep all 206
+        # sigmoids low when no bird is present, making inference-time max-prob
+        # rejection robust instead of probabilistic.
+        self._negative_buffer = None
+        self.p_negative       = float(cfg.get("p_negative", 0.0))
+        neg_dir               = cfg.get("negative_audio_dir", None)
+        if neg_dir and self.p_negative > 0:
+            try:
+                self._negative_buffer = SoundscapeAudioBuffer(
+                    soundscape_dir = neg_dir,
+                    sr             = cfg.get("sr", 32_000),
+                    chunk_duration = cfg.get("chunk_duration", 5.0),
+                )
+                logger.info(f"Negative-class buffer: ENABLED "
+                           f"(dir={neg_dir}, p_neg={self.p_negative})")
+            except FileNotFoundError as e:
+                logger.warning(f"Negative buffer disabled — {e}")
+                self._negative_buffer = None
         # ─────────────────────────────────────────────────────────────────
 
         # ── NOVEL #4: Prototypical Head for Rare Species ──────────────────
@@ -425,6 +449,33 @@ class BirdCLEFModule(L.LightningModule):
             audio  = torch.tensor(np.stack(mixed_audio_list), device=audio.device)
             labels = torch.tensor(np.stack(mixed_label_list), device=labels.device)
 
+        # ── Open-set negative-class injection ────────────────────────────
+        # Replace p_negative fraction of the batch with non-bird audio and
+        # zero out their labels. Trains the model to recognise "no bird here."
+        # Labels get the smoothing baseline (smooth/n_classes) rather than
+        # exact zero, matching how the dataset applies label smoothing.
+        if (self._negative_buffer is not None
+                and self.training
+                and self.p_negative > 0):
+            do_neg = torch.rand(audio.size(0)) < self.p_negative
+            n_neg  = int(do_neg.sum().item())
+            if n_neg > 0:
+                neg_audio = self._negative_buffer.sample(n_neg, audio.device)
+                neg_idx   = do_neg.nonzero(as_tuple=True)[0]
+                audio[neg_idx] = neg_audio
+                smooth     = float(self.cfg.get("label_smoothing", 0.05))
+                neg_label  = torch.full(
+                    (n_neg, labels.size(1)),
+                    smooth / labels.size(1) if smooth > 0 else 0.0,
+                    device = labels.device,
+                    dtype  = labels.dtype,
+                )
+                labels[neg_idx] = neg_label
+                if batch_idx % 100 == 0:
+                    self.log("train/neg_frac", float(n_neg) / audio.size(0),
+                             on_step=True, prog_bar=False)
+        # ─────────────────────────────────────────────────────────────────
+
         # Mel extraction (GPU, nnAudio)
         mel = self.mel(audio)         # (B, 1, n_mels, T')
 
@@ -624,11 +675,50 @@ class BirdCLEFModule(L.LightningModule):
         probs   = np.concatenate(self._val_probs,   axis=0)
         targets = np.concatenate(self._val_targets, axis=0)
 
-        # Aggregate to file level using max (paper Appendix B)
-        # For simplicity here we use clip-level AUC (use padded_auc_score)
+        # Macro AUC (competition metric)
         auc = padded_auc_score(targets, probs)
         self.log("val/auc", auc, prog_bar=True)
         logger.info(f"Epoch {self.current_epoch}: val/auc = {auc:.4f}")
+
+        # Per-class AUC + snapshot val probs/targets to log dir for the report.
+        # The Lightning logger may not always expose log_dir; fall back to cwd.
+        try:
+            log_dir = Path(self.logger.log_dir) if self.logger is not None else Path.cwd()
+        except Exception:
+            log_dir = Path.cwd()
+        log_dir.mkdir(parents=True, exist_ok=True)
+
+        from ..utils.postprocessing import per_class_auc_score
+        per_cls = per_class_auc_score(targets, probs)
+
+        # Append per-class AUC for this epoch into one JSON file per fold.
+        import json
+        auc_log_path = log_dir / "per_class_auc.json"
+        try:
+            history = json.loads(auc_log_path.read_text()) if auc_log_path.exists() else {}
+        except Exception:
+            history = {}
+        history[f"epoch_{self.current_epoch}"] = {
+            "macro_auc":     float(auc),
+            "per_class_auc": [None if np.isnan(x) else float(x) for x in per_cls],
+        }
+        try:
+            auc_log_path.write_text(json.dumps(history, indent=2))
+        except Exception as e:
+            logger.warning(f"Could not write per_class_auc.json: {e}")
+
+        # Snapshot raw val predictions (last epoch + every 5 epochs) so post-hoc
+        # ROC/PR/threshold analysis can run without re-loading the model.
+        keep_snapshot = (
+            self.current_epoch == (self.trainer.max_epochs - 1)
+            or self.current_epoch % 5 == 0
+        )
+        if keep_snapshot:
+            snap = log_dir / f"val_predictions_epoch{self.current_epoch:02d}.npz"
+            try:
+                np.savez_compressed(snap, probs=probs, targets=targets)
+            except Exception as e:
+                logger.warning(f"Could not write val snapshot: {e}")
 
         self._val_probs.clear()
         self._val_targets.clear()

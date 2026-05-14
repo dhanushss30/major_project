@@ -83,8 +83,13 @@ config = {
     "mixup_scale":          0.5,
     "chunk_strategy":       "firstlast7",
     "use_secondary_labels": True,
-    "bg_soundscape_paths":  [],
-    "bg_esc50_paths":       [],
+    "bg_soundscape_paths":  [],   # Populate with BirdCLEF 2023 train_soundscapes
+    "bg_esc50_paths":       [],   # Populate with ESC-50
+
+    # ── Open-set negative-class training ─────────────────────────────────
+    # See selected_eca.py for documentation. Identical semantics.
+    "negative_audio_dir":  None,
+    "p_negative":          0.1,
 
     # ── Aux loss warmup ──────────────────────────────────────────────────
     # Disabled — only FiLM (identity-initialised) is active, no aux loss to ramp.

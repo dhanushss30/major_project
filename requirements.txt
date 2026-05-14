@@ -15,19 +15,23 @@ lightning>=2.2
 torchmetrics>=1.0
 
 # ─── Audio Processing ─────────────────────────────────────────────────────────
-librosa>=0.10.1
+# librosa >= 0.10.2 and numba >= 0.60 are the floors that ship numpy 2 ABI
+# support. Going below either forces pip to downgrade numpy, which breaks the
+# container's torch (built against numpy 2.x).
+librosa>=0.10.2
 soundfile>=0.12.1
 nnAudio>=0.3.3
 audioread>=3.0
 soxr>=0.5.0
 
 # ─── Data / Numerics ──────────────────────────────────────────────────────────
-# numpy < 2.0: numba and several audio deps still build against the 1.x ABI.
-numpy>=1.26,<2.0
+# No numpy upper bound: the container ships numpy 2.x and torch is linked
+# against it. Constraining < 2 here forces a downgrade and breaks CUDA torch.
+numpy>=1.26
 pandas>=2.2
 scipy>=1.12
 h5py>=3.11
-numba>=0.59
+numba>=0.60
 scikit-learn>=1.3
 
 # ─── Experiment Selection ─────────────────────────────────────────────────────

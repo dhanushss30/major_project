@@ -32,6 +32,8 @@ soxr>=0.5.0
 # against it. Constraining < 2 here forces a downgrade and breaks CUDA torch.
 numpy>=1.26
 pandas>=2.2
+# pyarrow: required by pandas for parquet I/O (pseudo_labels are stored as parquet)
+pyarrow>=15.0
 scipy>=1.12
 h5py>=3.11
 numba>=0.60

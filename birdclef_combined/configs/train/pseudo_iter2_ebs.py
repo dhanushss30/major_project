@@ -29,16 +29,13 @@ config.update({
     "exp_name": (
         "tf_efficientnetv2_s_in21k_noamp_64bs_EqualBalancing_"
         "AdamW1e4_CosBatchLR1e6_Epoch50_FocalBCELoss_"
-        "PseudoF2PT05MT01P05I2_OOFplusFull_TCR"
+        "PseudoF2PT05MT01P05I2_OOFplusFull"
     ),
     "stage":              "pseudo",
-    "pseudo_labels_path": "D:/birdclef_data/pseudo_labels/pseudo_labels_iter2_combined.parquet",
+    "pseudo_labels_path": "/workspace/pseudo_labels/pseudo_labels_iter2_combined.parquet",
     "labeled_fraction":   0.5,
     "auc_weight":         0.3,
     "lr":                 3e-4,
     "pretrained":         False,
     "pretrained_path":    None,  # Set to Stage 1 best checkpoint
-    # NOVEL #6: TCR enabled for pseudo-label stage
-    "use_tcr":            True,
-    "tcr_weight":         0.05,
 })

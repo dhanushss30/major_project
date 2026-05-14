@@ -55,12 +55,22 @@ logger = logging.getLogger(__name__)
 
 
 def load_fold_models(
-    manifest_path: str,
-    backbone:      str,
-    n_classes:     int,
-    device:        torch.device,
+    manifest_path:          str,
+    backbone:               str,
+    n_classes:              int,
+    device:                 torch.device,
+    use_noise_conditioning: bool = True,   # Must match training-time setting
+    noise_dim:              int  = 128,
 ) -> List[BirdCLEFModel]:
-    """Load all fold models from a checkpoint manifest."""
+    """Load all fold models from a checkpoint manifest.
+
+    IMPORTANT: use_noise_conditioning must match the training-time value used
+    to produce the checkpoints. If the checkpoint was trained with FiLM but
+    the model is built without it (or vice-versa), the head's state_dict keys
+    won't match and strict=False will silently drop the head weights — the
+    fold model will then predict from random classifier weights, producing
+    garbage pseudo-labels.
+    """
     with open(manifest_path) as f:
         manifest = json.load(f)
 
@@ -71,9 +81,11 @@ def load_fold_models(
             continue
 
         model = BirdCLEFModel(
-            backbone_name = backbone,
-            n_classes     = n_classes,
-            pretrained    = False,
+            backbone_name          = backbone,
+            n_classes              = n_classes,
+            pretrained             = False,
+            use_noise_conditioning = use_noise_conditioning,
+            noise_dim              = noise_dim,
         )
 
         # Load from Lightning checkpoint
@@ -84,7 +96,15 @@ def load_fold_models(
             state = {k.replace("model.", "", 1): v for k, v in state.items()
                      if k.startswith("model.")}
 
-        model.load_state_dict(state, strict=False)
+        missing, unexpected = model.load_state_dict(state, strict=False)
+        if missing:
+            head_missing = [k for k in missing if k.startswith("head.")]
+            if head_missing:
+                logger.error(
+                    f"  {fold_name}: missing {len(head_missing)} head keys "
+                    f"(e.g. {head_missing[:3]}). FiLM config mismatch! "
+                    "Predictions will be from random classifier weights."
+                )
         model = model.to(device).eval()
         models.append(model)
         logger.info(f"  Loaded {fold_name}: {ckpt_path}")
@@ -120,6 +140,13 @@ def main():
                    help="Number of MC forward passes per model (T)")
     p.add_argument("--mc_min_confidence",   type=float, default=0.3,
                    help="Reject pseudo-labels below this confidence score")
+    # Novel #5: FiLM noise conditioning — must match training-time setting
+    p.add_argument("--use_noise_conditioning", action="store_true", default=True,
+                   help="Build models with FiLM head (matches training-time)")
+    p.add_argument("--no_noise_conditioning",  dest="use_noise_conditioning",
+                   action="store_false",
+                   help="Build models without FiLM head (legacy checkpoints)")
+    p.add_argument("--noise_dim",           type=int,   default=128)
     args = p.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -131,7 +158,9 @@ def main():
     # Load models
     logger.info(f"Loading models from {args.checkpoint_manifest}...")
     models = load_fold_models(
-        args.checkpoint_manifest, args.backbone, args.n_classes, device
+        args.checkpoint_manifest, args.backbone, args.n_classes, device,
+        use_noise_conditioning = args.use_noise_conditioning,
+        noise_dim              = args.noise_dim,
     )
     if not models:
         logger.error("No models loaded! Check checkpoint_manifest.json.")

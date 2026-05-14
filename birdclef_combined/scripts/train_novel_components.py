@@ -69,8 +69,18 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def load_fold_models(manifest_path: str, backbone: str, n_classes: int = 206):
-    """Load all fold checkpoints from a training manifest."""
+def load_fold_models(
+    manifest_path:          str,
+    backbone:               str,
+    n_classes:              int  = 206,
+    use_noise_conditioning: bool = True,
+    noise_dim:              int  = 128,
+):
+    """Load all fold checkpoints from a training manifest.
+
+    use_noise_conditioning must match training-time setting or head weights
+    will silently fail to load (Sequential vs FiLM head key mismatch).
+    """
     with open(manifest_path) as f:
         manifest = json.load(f)
 
@@ -81,9 +91,11 @@ def load_fold_models(manifest_path: str, backbone: str, n_classes: int = 206):
             continue
 
         model = BirdCLEFModel(
-            backbone_name = backbone,
-            n_classes     = n_classes,
-            pretrained    = False,
+            backbone_name          = backbone,
+            n_classes              = n_classes,
+            pretrained             = False,
+            use_noise_conditioning = use_noise_conditioning,
+            noise_dim              = noise_dim,
         )
 
         state = torch.load(ckpt_path, map_location="cpu")

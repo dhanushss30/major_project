@@ -96,60 +96,61 @@ config = {
     "bg_soundscape_paths": [],   # Prior-year soundscape paths
     "bg_esc50_paths":      [],   # ESC-50 audio paths
 
-    # ── Aux loss warmup (NEW) — ramps all aux losses 0→1 over N epochs
-    # to prevent the peak-then-collapse pattern seen in earlier ECA runs
-    # (val/auc 0.7471 ep6 → 0.581 ep16 was caused by aux losses overpowering
-    # the main classifier before BCE/Focal had stabilized).
-    "aux_warmup_epochs":   5,
+    # ── Aux loss warmup ──────────────────────────────────────────────────
+    # Disabled — only FiLM is active and it is identity-initialised, so the
+    # main BCE+Focal loss is the only signal training has to balance from step 0.
+    "aux_warmup_epochs":   0,
 
-    # ── NOVEL #1: DANN Domain Adaptation ─────────────────────────────────
-    "use_dann":          True,
-    "dann_lambda_max":   0.025,    # Halved from 0.05 — further reduce aux pressure
+    # ── NOVEL #1: DANN Domain Adaptation — DISABLED (caused collapse) ──────
+    "use_dann":          False,
+    "dann_lambda_max":   0.025,
     "dann_hidden_dim":   512,
 
-    # ── NOVEL #4: Prototypical Head for Rare Species ───────────────────
-    "use_prototypical":    True,
+    # ── NOVEL #4: Prototypical Head — DISABLED (auxiliary, removed for stability)
+    "use_prototypical":    False,
     "proto_temperature":   0.1,
     "proto_margin":        0.3,
     "proto_rare_thr":      0.2,
-    "proto_loss_weight":   0.025,  # Halved from 0.05
+    "proto_loss_weight":   0.025,
     "proto_half_life":     50,
     "proto_max_weight":    0.5,
     "prototypes_path":     None,
     "class_counts_path":   None,
 
-    # ── NOVEL #5: Soundscape Noise-Conditioned Features (FiLM) ────────
+    # ── NOVEL #5: Soundscape Noise-Conditioned FiLM Head — KEPT (the novel contribution)
+    # Initialised as identity (γ=1, β=0) so it starts as a no-op and can only learn
+    # to help. SoundscapeAudioBuffer is now constructed independently of DANN below.
     "use_noise_conditioning": True,
     "noise_dim":              128,
 
-    # ── NOVEL #6: Temporal Consistency Regularization ────────────────────
+    # ── NOVEL #6: Temporal Consistency Regularization — DISABLED
     "use_tcr":            False,
     "tcr_weight":         0.05,
     "tcr_max_gap":        5.0,
     "tcr_temperature":    2.0,
 
-    # ── NOVEL #7: Taxonomy-Aware Hierarchical Loss ──────────────────────
-    "use_taxonomy":                  True,
+    # ── NOVEL #7: Taxonomy-Aware Hierarchical Loss — DISABLED
+    "use_taxonomy":                  False,
     "taxonomy_hidden_dim":           128,
-    "taxonomy_aux_weight":           0.025,  # Halved from 0.05
-    "taxonomy_consistency_weight":   0.01,   # Halved from 0.02
-    "taxonomy_confusion_weight":     0.005,  # Halved from 0.01
-    "species_to_taxon":              {},     # Auto-loaded from species_to_taxon_path if empty
-    "species_to_taxon_path":         None,   # Path to JSON; defaults to configs/species_to_taxon.json
+    "taxonomy_aux_weight":           0.025,
+    "taxonomy_consistency_weight":   0.01,
+    "taxonomy_confusion_weight":     0.005,
+    "species_to_taxon":              {},
+    "species_to_taxon_path":         None,
 
-    # ── NOVEL #8: Multi-Resolution Spectral Fusion (MWSA) ──────────────
+    # ── NOVEL #8: Multi-Resolution Spectral Fusion — DISABLED
     "use_multi_res_mel":  False,
     "multi_res_mode":     "stack",
 
-    # ── NOVEL #10: Causal Feature Disentanglement ────────────────────────
-    "use_causal":              True,
+    # ── NOVEL #10: Causal Feature Disentanglement — DISABLED (primary collapse culprit)
+    "use_causal":              False,
     "causal_dim":              768,
     "spurious_dim":            512,
     "causal_dropout":          0.1,
-    "causal_lambda_inv":       0.01,   # Halved from 0.02 — was main aux-loss culprit
-    "causal_lambda_hsic":      0.01,   # Halved from 0.02
-    "causal_warmup_steps":     5000,   # Increased from 3000 — slower internal ramp
-    "causal_cls_weight":       0.025,  # Halved from 0.05
+    "causal_lambda_inv":       0.01,
+    "causal_lambda_hsic":      0.01,
+    "causal_warmup_steps":     5000,
+    "causal_cls_weight":       0.025,
 
     # ── Early stopping (saves compute, never reduces AUC) ─────────────
     "early_stopping":            True,

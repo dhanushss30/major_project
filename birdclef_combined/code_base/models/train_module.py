@@ -157,38 +157,49 @@ class BirdCLEFModule(L.LightningModule):
         # BCE/Focal before the classifier had stabilized.
         self.aux_warmup_epochs = int(cfg.get("aux_warmup_epochs", 0))
 
-        # ── NOVEL: DANN Domain Adaptation (Contribution #1) ───────────────
-        # Enabled when "soundscape_root" is set and "use_dann" is True
-        self.use_dann      = cfg.get("use_dann", False)
-        self.dann_lambda   = cfg.get("dann_lambda_max", 0.3)
-        self._dann_buffer  = None
-        self._domain_clf   = None
-        self._domain_loss  = None
+        # ── Soundscape audio buffer (shared by DANN + FiLM noise conditioning) ──
+        # Built when EITHER DANN or noise-conditioning is enabled, so FiLM can
+        # sample real soundscape audio for the LTAS descriptor even when DANN
+        # is off. Without this, FiLM falls back to zeros = identity = no benefit.
+        self.use_dann       = cfg.get("use_dann", False)
+        self.dann_lambda    = cfg.get("dann_lambda_max", 0.3)
+        self._dann_buffer   = None
+        self._domain_clf    = None
+        self._domain_loss   = None
 
-        if self.use_dann and cfg.get("soundscape_root"):
-            # Use the auto-detected feature dim from the actual backbone, not
-            # the registry value (which can lag behind timm version changes).
-            feat_dim = self.model.feat_dim
+        need_soundscape_buffer = (
+            self.use_dann or cfg.get("use_noise_conditioning", False)
+        )
 
-            self._domain_clf  = DomainClassifier(
-                in_features = feat_dim,
-                hidden_dim  = cfg.get("dann_hidden_dim", 512),
-            )
-            self._domain_loss = DomainAdaptationLoss()
-
+        if need_soundscape_buffer and cfg.get("soundscape_root"):
             try:
                 self._dann_buffer = SoundscapeAudioBuffer(
                     soundscape_dir = cfg["soundscape_root"],
                     sr             = cfg.get("sr", 32_000),
                     chunk_duration = cfg.get("chunk_duration", 5.0),
                 )
-                logger.info("DANN domain adaptation: ENABLED "
-                           f"(lambda_max={self.dann_lambda})")
+                logger.info("Soundscape audio buffer: ENABLED "
+                           f"(used by DANN={self.use_dann}, "
+                           f"FiLM={cfg.get('use_noise_conditioning', False)})")
             except FileNotFoundError as e:
-                logger.warning(f"DANN disabled — soundscape dir error: {e}")
-                self.use_dann     = False
-                self._domain_clf  = None
-                self._domain_loss = None
+                logger.warning(f"Soundscape buffer disabled — {e}. "
+                               "FiLM noise conditioning will fall back to "
+                               "identity (zero noise vector).")
+                self._dann_buffer = None
+                # If DANN required the buffer and it's missing, disable DANN
+                if self.use_dann:
+                    self.use_dann = False
+
+        # ── NOVEL: DANN Domain Adaptation (Contribution #1) ───────────────
+        if self.use_dann and self._dann_buffer is not None:
+            feat_dim = self.model.feat_dim
+            self._domain_clf  = DomainClassifier(
+                in_features = feat_dim,
+                hidden_dim  = cfg.get("dann_hidden_dim", 512),
+            )
+            self._domain_loss = DomainAdaptationLoss()
+            logger.info("DANN domain adaptation: ENABLED "
+                       f"(lambda_max={self.dann_lambda})")
         # ─────────────────────────────────────────────────────────────────
 
         # ── NOVEL #4: Prototypical Head for Rare Species ──────────────────

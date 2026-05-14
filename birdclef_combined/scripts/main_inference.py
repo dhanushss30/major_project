@@ -61,15 +61,22 @@ def load_config(path: str) -> dict:
 
 
 def load_experiment(
-    manifest_path: str,
-    backbone:      str,
-    n_classes:     int,
-    mel:           MelExtractor,
-    weight:        float = 1.0,
-    name:          str   = "exp",
-    device:        Optional[torch.device] = None,
+    manifest_path:          str,
+    backbone:               str,
+    n_classes:              int,
+    mel:                    MelExtractor,
+    weight:                 float = 1.0,
+    name:                   str   = "exp",
+    device:                 Optional[torch.device] = None,
+    use_noise_conditioning: bool  = True,   # Must match training-time setting
+    noise_dim:              int   = 128,
 ) -> ExperimentEnsemble:
-    """Load all fold models from one experiment."""
+    """Load all fold models from one experiment.
+
+    IMPORTANT: use_noise_conditioning must match the value used at training.
+    A mismatch causes head keys to drift (Sequential vs FiLM) and strict=False
+    silently drops the entire head — predictions become random.
+    """
     device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     with open(manifest_path) as f:
@@ -82,9 +89,11 @@ def load_experiment(
             continue
 
         model = BirdCLEFModel(
-            backbone_name = backbone,
-            n_classes     = n_classes,
-            pretrained    = False,
+            backbone_name          = backbone,
+            n_classes              = n_classes,
+            pretrained             = False,
+            use_noise_conditioning = use_noise_conditioning,
+            noise_dim              = noise_dim,
         )
 
         state = torch.load(ckpt_path, map_location="cpu")
@@ -93,7 +102,14 @@ def load_experiment(
                      for k, v in state["state_dict"].items()
                      if k.startswith("model.")}
 
-        model.load_state_dict(state, strict=False)
+        missing, _ = model.load_state_dict(state, strict=False)
+        head_missing = [k for k in missing if k.startswith("head.")]
+        if head_missing:
+            logger.error(
+                f"  [{name}] {fold_name}: {len(head_missing)} head keys missing "
+                f"(e.g. {head_missing[:3]}). FiLM config mismatch — predictions "
+                "will be from random classifier weights."
+            )
         model = model.to(device).eval()
         models.append(model)
         logger.info(f"  [{name}] Loaded {fold_name}")
@@ -473,6 +489,12 @@ def main():
 
     n_classes = cfg.get("n_classes", 206)
 
+    # FiLM is the novel head that all checkpoints in this pipeline are trained with.
+    # Per-experiment override via exp_cfg["use_noise_conditioning"] supported for
+    # mixing legacy non-FiLM checkpoints if needed.
+    cfg_use_film  = cfg.get("use_noise_conditioning", True)
+    cfg_noise_dim = cfg.get("noise_dim", 128)
+
     # ── Load generalist experiments (N experiments × 5 folds) ─────────────
     experiments = []
     for exp_cfg in cfg.get("experiments", []):
@@ -481,13 +503,15 @@ def main():
             logger.warning(f"Manifest not found, skipping: {manifest}")
             continue
         exp = load_experiment(
-            manifest_path = manifest,
-            backbone      = exp_cfg["backbone"],
-            n_classes     = n_classes,
-            mel           = mel,
-            weight        = exp_cfg.get("weight", 1.0),
-            name          = exp_cfg.get("name", "exp"),
-            device        = device,
+            manifest_path          = manifest,
+            backbone               = exp_cfg["backbone"],
+            n_classes              = n_classes,
+            mel                    = mel,
+            weight                 = exp_cfg.get("weight", 1.0),
+            name                   = exp_cfg.get("name", "exp"),
+            device                 = device,
+            use_noise_conditioning = exp_cfg.get("use_noise_conditioning", cfg_use_film),
+            noise_dim              = exp_cfg.get("noise_dim", cfg_noise_dim),
         )
         experiments.append(exp)
         logger.info(f"Loaded experiment '{exp.name}': {len(exp.models)} models")
@@ -504,13 +528,15 @@ def main():
         sp_manifest = specialist_cfg.get("manifest", "")
         if Path(sp_manifest).exists():
             specialist_exp = load_experiment(
-                manifest_path = sp_manifest,
-                backbone      = specialist_cfg["backbone"],
-                n_classes     = n_classes,
-                mel           = mel,
-                weight        = specialist_cfg.get("weight", 0.4),
-                name          = specialist_cfg.get("name", "specialist"),
-                device        = device,
+                manifest_path          = sp_manifest,
+                backbone               = specialist_cfg["backbone"],
+                n_classes              = n_classes,
+                mel                    = mel,
+                weight                 = specialist_cfg.get("weight", 0.4),
+                name                   = specialist_cfg.get("name", "specialist"),
+                device                 = device,
+                use_noise_conditioning = specialist_cfg.get("use_noise_conditioning", cfg_use_film),
+                noise_dim              = specialist_cfg.get("noise_dim", cfg_noise_dim),
             )
             logger.info(
                 f"Loaded specialist '{specialist_exp.name}': "

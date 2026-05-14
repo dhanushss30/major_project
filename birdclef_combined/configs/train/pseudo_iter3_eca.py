@@ -39,7 +39,7 @@ config.update({
 
     # All 3 iterations merged into one parquet
     # Run: python scripts/merge_pseudo_labels.py to create this file
-    "pseudo_labels_path": "D:/birdclef_data/pseudo_labels/pseudo_labels_all_iters_merged.parquet",
+    "pseudo_labels_path": "/workspace/pseudo_labels/pseudo_labels_all_iters_merged.parquet",
 
     "labeled_fraction":   0.5,     # 50% real data, 50% pseudo
     "auc_weight":         0.3,     # SoftAUC enabled (paper §5.3)
@@ -47,7 +47,4 @@ config.update({
     "epochs":             20,      # Fewer epochs for pseudo stage
     "pretrained":         False,
     "pretrained_path":    None,    # Set to best checkpoint from pseudo_iter1_eca
-    # NOVEL #6: TCR enabled for pseudo-label stage
-    "use_tcr":            True,
-    "tcr_weight":         0.05,
 })

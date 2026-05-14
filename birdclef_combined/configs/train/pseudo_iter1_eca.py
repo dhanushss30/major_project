@@ -31,20 +31,16 @@ config.update({
     "exp_name": (
         "eca_nfnet_l0_noamp_64bs_SqrtBalancing_"
         "Radamlr1e3_CosBatchLR1e6_Epoch50_FocalBCELoss_"
-        "PseudoF2PT05MT01P06I1_Full_TCR"
+        "PseudoF2PT05MT01P06I1_Full"
     ),
     "stage":                "pseudo",
 
     # ── Pseudo-label path (set after running generate_pseudo_labels.py) ──
-    "pseudo_labels_path":   "D:/birdclef_data/pseudo_labels/pseudo_labels_iter1_full.parquet",
+    "pseudo_labels_path":   "/workspace/pseudo_labels/pseudo_labels_iter1_full.parquet",
     "labeled_fraction":     0.5,
 
     # ── SoftAUC enabled for pseudo stage ──────────────────────────────────
     "auc_weight":           0.3,
-
-    # ── NOVEL #6: TCR enabled for pseudo-label stage ─────────────────────
-    "use_tcr":              True,
-    "tcr_weight":           0.05,
 
     # ── Slightly reduced LR for fine-tuning ───────────────────────────────
     "lr":                   5e-4,

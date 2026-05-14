@@ -103,7 +103,7 @@ config = {
     # all-zero. This teaches the model "no bird present → all sigmoids low,"
     # which makes the inference-time max-prob threshold a real rejection
     # signal instead of just a low-confidence proxy.
-    "negative_audio_dir":  None,   # Set to ESC-50 root on instance
+    "negative_audio_dir":  "/workspace/ESC-50-nobird",  # ESC-50 minus rooster/hen/crow/chirping_birds
     "p_negative":          0.1,    # 10% of training samples are non-bird
 
     # ── Aux loss warmup ──────────────────────────────────────────────────

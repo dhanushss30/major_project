@@ -88,7 +88,7 @@ config = {
 
     # ── Open-set negative-class training ─────────────────────────────────
     # See selected_eca.py for documentation. Identical semantics.
-    "negative_audio_dir":  None,
+    "negative_audio_dir":  "/workspace/ESC-50-nobird",
     "p_negative":          0.1,
 
     # ── Aux loss warmup ──────────────────────────────────────────────────

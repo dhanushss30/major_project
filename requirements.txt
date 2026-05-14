@@ -1,42 +1,43 @@
-# ─── PyTorch (CUDA 12.1) ─────────────────────────────────────────────────────
-# Install with: pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cu121
-# If you don't have a GPU (CPU only), replace the three lines below with:
-#   torch==2.2.2
-#   torchaudio==2.2.2
-#   torchvision==0.17.2
-torch==2.2.2+cu121
-torchaudio==2.2.2+cu121
-torchvision==0.17.2+cu121
+# ─── PyTorch ──────────────────────────────────────────────────────────────────
+# torch/torchaudio/torchvision are intentionally NOT pinned here.
+#
+# On Vast.ai pytorch containers (and most managed GPU images), torch is
+# pre-installed with a CUDA build matched to the host driver. Reinstalling
+# torch via pip can downgrade CUDA support and break the GPU. Trust the
+# container's torch; only install it yourself on a bare environment via
+# https://pytorch.org/get-started/locally/.
+#
+# Verified compatible with: torch >= 2.2 (incl. 2.11+cu128 on Vast.ai).
 
 # ─── Deep Learning / Model Zoo ────────────────────────────────────────────────
-timm==0.9.16
-lightning==2.2.5
-pytorch-lightning==2.6.1
-torchmetrics==1.9.0
+timm>=0.9.16
+lightning>=2.2
+torchmetrics>=1.0
 
 # ─── Audio Processing ─────────────────────────────────────────────────────────
-librosa==0.10.1
-soundfile==0.12.1
-nnAudio==0.3.3
-audioread==3.1.0
-soxr==0.5.0.post1
+librosa>=0.10.1
+soundfile>=0.12.1
+nnAudio>=0.3.3
+audioread>=3.0
+soxr>=0.5.0
 
 # ─── Data / Numerics ──────────────────────────────────────────────────────────
-numpy==1.26.4
-pandas==2.2.2
-scipy==1.12.0
-h5py==3.11.0
-numba==0.65.0
-scikit-learn==1.8.0
+# numpy < 2.0: numba and several audio deps still build against the 1.x ABI.
+numpy>=1.26,<2.0
+pandas>=2.2
+scipy>=1.12
+h5py>=3.11
+numba>=0.59
+scikit-learn>=1.3
 
 # ─── Experiment Selection ─────────────────────────────────────────────────────
 optuna
 
-# ─── ONNX Export ──────────────────────────────────────────────────────────────
-onnx==1.21.0
-onnxruntime==1.24.4
+# ─── ONNX Export (optional — only needed for `main_inference.py --mode export`)
+onnx>=1.16
+onnxruntime>=1.18
 
 # ─── Utilities ────────────────────────────────────────────────────────────────
-tqdm==4.67.3
-matplotlib==3.10.8
-seaborn==0.13.2
+tqdm>=4.66
+matplotlib>=3.7
+seaborn>=0.13

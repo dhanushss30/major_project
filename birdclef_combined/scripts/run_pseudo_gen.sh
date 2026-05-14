@@ -34,6 +34,5 @@ python scripts/generate_pseudo_labels.py \
     --power_alpha "$POWER_ALPHA" \
     --backbone eca_nfnet_l0 \
     --n_classes 206 \
-    --use_noise_conditioning \
-    --noise_dim 128 \
+    --no_noise_conditioning \
     2>&1 | tee "$LOG"

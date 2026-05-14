@@ -111,8 +111,8 @@ config = {
     "prototypes_path":     None,
     "class_counts_path":   None,
 
-    # ── NOVEL #5: FiLM Noise Conditioning — KEPT (the novel contribution) ─
-    "use_noise_conditioning": True,
+    # ── NOVEL #5: FiLM Noise Conditioning — DISABLED (see selected_eca.py) ─
+    "use_noise_conditioning": False,
     "noise_dim":              128,
 
     # ── NOVEL #6: Temporal Consistency Regularization — DISABLED

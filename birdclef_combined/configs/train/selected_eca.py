@@ -137,10 +137,16 @@ config = {
     "prototypes_path":     None,
     "class_counts_path":   None,
 
-    # ── NOVEL #5: Soundscape Noise-Conditioned FiLM Head — KEPT (the novel contribution)
-    # Initialised as identity (γ=1, β=0) so it starts as a no-op and can only learn
-    # to help. SoundscapeAudioBuffer is now constructed independently of DANN below.
-    "use_noise_conditioning": True,
+    # ── NOVEL #5: FiLM Noise Conditioning — DISABLED ──────────────────────
+    # Was initialised as identity (γ=1, β=0) and trained end-to-end. In practice
+    # both main and EMA gamma_net.bias collapsed from 1.0 to 0.04 / 0.19 over
+    # ~6 epochs, attenuating features 25x. Val/auc 0.7841 was preserved
+    # (val is close to training distribution) but pseudo-label inference on
+    # OOD soundscapes produced near-constant outputs (per-chunk range 0.059).
+    # Disabled for stability. Novel contributions move to inference-time:
+    #   #1 open-set max-prob rejection (handles "not a bird" without training)
+    #   #2 per-class temperature calibration + adaptive thresholds (post-hoc)
+    "use_noise_conditioning": False,
     "noise_dim":              128,
 
     # ── NOVEL #6: Temporal Consistency Regularization — DISABLED

@@ -13,6 +13,9 @@
 timm>=0.9.16
 lightning>=2.2
 torchmetrics>=1.0
+# tensorboard is the default Lightning logger (use_wandb=False in our configs).
+# Without it, Trainer crashes at logger init.
+tensorboard>=2.14
 
 # ─── Audio Processing ─────────────────────────────────────────────────────────
 # librosa >= 0.10.2 and numba >= 0.60 are the floors that ship numpy 2 ABI

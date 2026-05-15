@@ -417,10 +417,48 @@ def main():
     logger.info(f"Loaded metadata: {len(df):,} samples, "
                 f"{df['primary_label'].nunique()} species")
 
-    # Build label mapping
+    # Build label mapping (built from the FULL df so index ↔ species code
+    # stays consistent with downstream inference/pseudo-label pipelines, even
+    # when rare-class rows are filtered out of training below.)
     all_labels   = sorted(df["primary_label"].unique())
     label_to_idx = {l: i for i, l in enumerate(all_labels)}
     logger.info(f"Classes: {len(label_to_idx)}")
+
+    # Expand BG audio directories to file lists if set. Caps the path count to
+    # bound BackgroundNoiseMixer's in-memory cache (one entry per loaded file
+    # per worker, no eviction). 500 paths × ~7.5 MB OGG ≈ 4 GB worst case per
+    # worker. Seeded so the same subset is used across re-runs.
+    bg_max = int(cfg.get("bg_max_paths", 500))
+    for dir_key, list_key, pattern, seed in [
+        ("bg_soundscape_dir", "bg_soundscape_paths", "*.ogg", 42),
+        ("bg_esc50_dir",      "bg_esc50_paths",      "*.wav", 43),
+    ]:
+        bg_dir = cfg.get(dir_key)
+        if bg_dir and Path(bg_dir).is_dir():
+            paths = sorted(str(p) for p in Path(bg_dir).glob(pattern))
+            if bg_max and len(paths) > bg_max:
+                rng   = np.random.default_rng(seed)
+                idx   = rng.choice(len(paths), size=bg_max, replace=False)
+                paths = sorted(paths[i] for i in idx)
+            cfg[list_key] = paths
+            logger.info(f"BG audio: {len(paths):,} files from {bg_dir} → cfg['{list_key}']")
+
+    # Filter rare-class rows from training data. label_to_idx stays 206-class
+    # for compatibility; the model still outputs 206 logits but rare classes
+    # receive only label-smoothing supervision (~0.00024) and converge to ≈0.
+    # See selected_eca.py "Rare-class exclusion" section for full rationale.
+    min_samples = int(cfg.get("min_class_samples_to_train", 0))
+    if min_samples > 0:
+        class_counts = df["primary_label"].value_counts()
+        rare         = class_counts[class_counts < min_samples].index.tolist()
+        if rare:
+            n_before = len(df)
+            df       = df[~df["primary_label"].isin(rare)].reset_index(drop=True)
+            kept     = df["primary_label"].nunique()
+            logger.info(f"Rare-class filter: dropped {len(rare)} classes with "
+                        f"< {min_samples} samples "
+                        f"({n_before - len(df):,} of {n_before:,} rows). "
+                        f"Training on {kept} of {len(label_to_idx)} classes.")
 
     # Build CV folds
     df = build_cv_splits(df, n_folds=cfg.get("n_folds", 5))

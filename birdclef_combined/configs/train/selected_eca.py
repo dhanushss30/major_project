@@ -96,10 +96,32 @@ config = {
     "chunk_strategy":      "firstlast7",  # paper §5.5
     "use_secondary_labels": True,         # XC secondary labels
 
-    # Background noise paths (set to actual paths)
-    # On Vast.ai instance these are populated by the dataset-download step.
-    "bg_soundscape_paths": [],   # Prior-year soundscape paths (BirdCLEF 2023 train_soundscapes)
-    "bg_esc50_paths":      [],   # ESC-50 audio paths (https://github.com/karolpiczak/ESC-50)
+    # ── Background noise augmentation (paper §5.2, p=0.5, SNR 3-20 dB) ──
+    # main_train.py globs bg_soundscape_dir / bg_esc50_dir into the *_paths
+    # lists below, sampled down to bg_max_paths each to bound the mixer's
+    # in-memory cache. Set the *_dir to None to skip BG mixing.
+    #
+    # Stage 1 v3 trained without BG mixing (these dirs were empty) and
+    # produced a model that's confident on focal recordings but blind on
+    # soundscape audio (max common-bird prob in pseudo-gen: 0.34). Adding
+    # real soundscape + ESC-50 BG at training time bridges the domain gap.
+    "bg_soundscape_dir":   "/workspace/birdclef-2025/train_soundscapes",
+    "bg_esc50_dir":        "/workspace/ESC-50-nobird",
+    "bg_max_paths":        500,
+    "bg_soundscape_paths": [],   # auto-populated from bg_soundscape_dir
+    "bg_esc50_paths":      [],   # auto-populated from bg_esc50_dir
+
+    # ── Rare-class exclusion ─────────────────────────────────────────────
+    # Drop training rows for classes with fewer than this many samples.
+    # Stage 1 v3 trained on all 206 classes including 78 rare iNat taxa
+    # (amphibians/insects) with 2-3 samples each. The model memorized those
+    # few samples and produced spurious high-confidence predictions on
+    # soundscape audio, completely dominating pseudo-label generation
+    # (top-8 pseudo-classes were all rare taxa, zero common birds passed
+    # the max-prob threshold). label_to_idx stays at 206 entries; rare
+    # classes get only label-smoothing (~0.00024) supervision and the
+    # model learns to output ≈0 for them — exactly what we want.
+    "min_class_samples_to_train": 50,
 
     # ── Open-set negative-class training ─────────────────────────────────
     # With probability p_negative, replace a training sample's audio with a

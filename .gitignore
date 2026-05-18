@@ -48,3 +48,20 @@ Thumbs.db
 
 # ── Claude Code settings (local only, never push) ───────────────────────────
 .claude/
+
+# ── Backup of trained checkpoints + logs (multi-GB, do not push) ────────────
+BACKUP_FINAL/
+
+# ── Frontend node_modules + build artifacts ─────────────────────────────────
+node_modules/
+app/frontend/node_modules/
+app/frontend/dist/
+
+# ── Secrets ─────────────────────────────────────────────────────────────────
+.env
+app/backend/.env
+*.env.local
+
+# ── Backend runtime logs ────────────────────────────────────────────────────
+app/backend/backend_out.log
+app/backend/backend_err.log

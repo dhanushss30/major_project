@@ -96,16 +96,18 @@ config = {
     "chunk_strategy":      "firstlast7",  # paper §5.5
     "use_secondary_labels": True,         # XC secondary labels
 
-    # ── Background noise augmentation (paper §5.2, p=0.5, SNR 3-20 dB) ──
-    # main_train.py globs bg_soundscape_dir / bg_esc50_dir into the *_paths
-    # lists below, sampled down to bg_max_paths each to bound the mixer's
-    # in-memory cache. Set the *_dir to None to skip BG mixing.
+    # ── Background noise augmentation — ESC-50 ONLY for folds 1/2 ────────
+    # v4 attempt mixed BG from bg_soundscape_dir = train_soundscapes and
+    # collapsed: those soundscapes contain unlabeled target birds, so
+    # mixing them in as "BG noise" while keeping focal-only labels created
+    # a labeling contradiction → val/auc dropped from 0.7756 to 0.70.
     #
-    # Stage 1 v3 trained without BG mixing (these dirs were empty) and
-    # produced a model that's confident on focal recordings but blind on
-    # soundscape audio (max common-bird prob in pseudo-gen: 0.34). Adding
-    # real soundscape + ESC-50 BG at training time bridges the domain gap.
-    "bg_soundscape_dir":   "/workspace/birdclef-2025/train_soundscapes",
+    # ESC-50 is SAFE: 2000 clips of environmental sounds (rain, traffic,
+    # machines, animals other than birds). No labeling contradiction, just
+    # noise robustness. The model learns "noise present, still find bird
+    # patterns" — directly improves real-world soundscape demo performance
+    # without risking the v4 collapse.
+    "bg_soundscape_dir":   None,
     "bg_esc50_dir":        "/workspace/ESC-50-nobird",
     "bg_max_paths":        500,
     "bg_soundscape_paths": [],   # auto-populated from bg_soundscape_dir

@@ -20,7 +20,6 @@ export default function PredictPage() {
 
   // Settings
   const [topK,             setTopK]              = useState(3)
-  const [noBirdThresh,     setNoBirdThresh]      = useState(0.10)
   const [noisePreprocess,  setNoisePreprocess]   = useState(true)
   const [onlyWellTrained,  setOnlyWellTrained]   = useState(true)
   const [consistencyBoost, setConsistencyBoost]  = useState(0.05)
@@ -53,7 +52,6 @@ export default function PredictPage() {
         getWaveform(audioFile, 1024),
         predict(audioFile, {
           topK,
-          noBirdThresh,
           noisePreprocess,
           consistencyBoost,
           onlyWellTrained,
@@ -99,9 +97,10 @@ export default function PredictPage() {
         <div className="heading-mono mb-2">// Predict</div>
         <h1 className="heading-display text-4xl">Per-5-second species prediction</h1>
         <p className="text-muted-light mt-2 max-w-2xl">
-          Upload an audio clip and the 4-checkpoint ensemble will identify bird
-          species per 5-second chunk with confidence scores, spectrogram
-          visualization, and open-set rejection for non-bird audio.
+          Upload an audio clip. An AST (AudioSet) gate decides per 5-sec chunk
+          whether it contains a bird — speech, music, traffic, silence, etc. are
+          labeled as such. Bird chunks then pass to the 4-checkpoint species
+          ensemble for per-window top-K classification.
         </p>
       </div>
 
@@ -179,15 +178,14 @@ export default function PredictPage() {
             value={topK} onChange={setTopK}
           />
           <Slider
-            label="No-bird threshold" min={0.02} max={0.50} step={0.01}
-            value={noBirdThresh} onChange={setNoBirdThresh}
-            hint="Above this, prediction shown; below → 'no bird'"
-          />
-          <Slider
             label="Consistency boost" min={0} max={0.20} step={0.01}
             value={consistencyBoost} onChange={setConsistencyBoost}
             hint="Boost species seen in adjacent chunks"
           />
+          <div className="text-[10px] text-muted-light leading-relaxed border-t border-ink-500/40 pt-3">
+            <span className="text-accent-cyan font-mono">// non-bird detection</span><br />
+            Handled automatically by AST (AudioSet) gate. Chunks of speech, music, traffic, silence etc. are labeled with the detected category instead of a species.
+          </div>
           <Toggle
             label="Noise preprocessing"
             value={noisePreprocess} onChange={setNoisePreprocess}
@@ -226,20 +224,26 @@ export default function PredictPage() {
               <SummaryCard label="Duration"        value={`${result.duration_sec}s`} accent="violet" />
             </div>
 
-            {/* Overall top species */}
-            {result.overall_top?.length > 0 && (
-              <div className="card p-6">
-                <div className="flex items-center gap-2 mb-4">
-                  <Music className="w-5 h-5 text-accent-lime" />
-                  <div className="heading-mono">// Overall top species (averaged across chunks)</div>
-                </div>
-                <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                  {result.overall_top.map((s) => (
-                    <SpeciesCard key={s.code} species={s} variant="overall" />
-                  ))}
-                </div>
+            {/* ─── PRIMARY: Per-5-second predictions ─────────────────── */}
+            <div className="card p-6">
+              <div className="flex items-center gap-2 mb-2">
+                <Music className="w-5 h-5 text-accent-cyan" />
+                <div className="heading-mono">// Per-5-second predictions</div>
               </div>
-            )}
+              <p className="text-xs text-muted-light mb-4">
+                Top-{topK} species in each 5-second window. Click a window header to view its mel-spectrogram below.
+              </p>
+              <div className="grid md:grid-cols-2 gap-4">
+                {result.chunks.map((c) => (
+                  <ChunkPanel
+                    key={c.chunk_idx}
+                    chunk={c}
+                    isSelected={selectedChunk === c.chunk_idx}
+                    onSelect={() => onSelectChunk(c.chunk_idx)}
+                  />
+                ))}
+              </div>
+            </div>
 
             {/* Waveform */}
             {waveform && (
@@ -279,92 +283,118 @@ export default function PredictPage() {
               </div>
             )}
 
-            {/* Spectrogram + chunk picker */}
-            <div className="grid lg:grid-cols-3 gap-6">
-              <div className="lg:col-span-2 card p-6">
-                <div className="flex items-center justify-between mb-3">
-                  <div className="heading-mono">
-                    // Mel-spectrogram · chunk {selectedChunk + 1} of {result.n_chunks}
-                  </div>
-                  <div className="text-xs text-muted">
-                    {selectedChunk * 5}s – {(selectedChunk + 1) * 5}s
-                  </div>
+            {/* Spectrogram — full width, driven by selected chunk above */}
+            <div className="card p-6">
+              <div className="flex items-center justify-between mb-3">
+                <div className="heading-mono">
+                  // Mel-spectrogram · chunk {selectedChunk + 1} of {result.n_chunks}
                 </div>
-                {spectro && spectro.z && (
-                  <Plot
-                    data={[{
-                      z: spectro.z,
-                      type: 'heatmap',
-                      colorscale: 'Magma',
-                      showscale: true,
-                      colorbar: { title: 'dB', titlefont: { color: '#7a8290' }, tickfont: { color: '#7a8290' } },
-                    }]}
-                    layout={{
-                      autosize: true,
-                      height: 320,
-                      margin: { l: 50, r: 10, t: 10, b: 40 },
-                      paper_bgcolor: 'transparent',
-                      plot_bgcolor:  'transparent',
-                      xaxis: { title: 'time frame', color: '#7a8290', gridcolor: 'rgba(255,255,255,0.05)' },
-                      yaxis: { title: 'mel bin',   color: '#7a8290', gridcolor: 'rgba(255,255,255,0.05)' },
-                    }}
-                    config={{ displayModeBar: false, responsive: true }}
-                    style={{ width: '100%' }}
-                  />
-                )}
+                <div className="text-xs text-muted">
+                  {selectedChunk * 5}s – {(selectedChunk + 1) * 5}s
+                </div>
               </div>
+              {spectro && spectro.z && (
+                <Plot
+                  data={[{
+                    z: spectro.z,
+                    type: 'heatmap',
+                    colorscale: 'Magma',
+                    showscale: true,
+                    colorbar: { title: 'dB', titlefont: { color: '#7a8290' }, tickfont: { color: '#7a8290' } },
+                  }]}
+                  layout={{
+                    autosize: true,
+                    height: 320,
+                    margin: { l: 50, r: 10, t: 10, b: 40 },
+                    paper_bgcolor: 'transparent',
+                    plot_bgcolor:  'transparent',
+                    xaxis: { title: 'time frame', color: '#7a8290', gridcolor: 'rgba(255,255,255,0.05)' },
+                    yaxis: { title: 'mel bin',   color: '#7a8290', gridcolor: 'rgba(255,255,255,0.05)' },
+                  }}
+                  config={{ displayModeBar: false, responsive: true }}
+                  style={{ width: '100%' }}
+                />
+              )}
+            </div>
 
-              {/* Chunk picker */}
-              <div className="card p-5">
-                <div className="heading-mono mb-3">// Chunks</div>
-                <div className="space-y-2 max-h-[360px] overflow-y-auto pr-1">
-                  {result.chunks.map((c) => (
-                    <button
-                      key={c.chunk_idx}
-                      onClick={() => onSelectChunk(c.chunk_idx)}
-                      className={`w-full text-left px-3 py-2 rounded-lg border transition-all
-                        ${selectedChunk === c.chunk_idx
-                          ? 'border-accent-cyan/40 bg-accent-cyan/5'
-                          : 'border-ink-500/40 hover:border-ink-400/60'}`}
-                    >
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="font-mono text-xs text-muted">
-                          {c.start_sec}s–{c.end_sec}s
-                        </span>
-                        {c.is_bird
-                          ? <CheckCircle2 className="w-4 h-4 text-accent-lime" />
-                          : <AlertTriangle className="w-4 h-4 text-accent-amber" />}
-                      </div>
-                      {c.is_bird ? (
-                        <div className="text-sm font-medium">
-                          {c.top_species[0]?.common_name || c.top_species[0]?.code}
-                          <span className="text-muted text-xs ml-2 font-mono">
-                            {c.top_species[0]?.prob.toFixed(3)}
-                          </span>
-                        </div>
-                      ) : (
-                        <div className="text-sm text-muted">No bird detected</div>
-                      )}
-                    </button>
+            {/* Aggregate (averaged) — moved to bottom, secondary */}
+            {result.overall_top?.length > 0 && (
+              <div className="card p-6">
+                <div className="flex items-center gap-2 mb-1">
+                  <Music className="w-4 h-4 text-accent-lime" />
+                  <div className="heading-mono text-sm">// Aggregate across all chunks</div>
+                </div>
+                <p className="text-xs text-muted-light mb-4">
+                  Mean probability over all {result.n_chunks} windows — recording-level summary, not a per-second prediction.
+                </p>
+                <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {result.overall_top.map((s) => (
+                    <SpeciesCard key={s.code} species={s} variant="overall" />
                   ))}
                 </div>
               </div>
-            </div>
-
-            {/* Per-chunk top-K display for the selected chunk */}
-            <div className="card p-6">
-              <div className="heading-mono mb-4">
-                // Top-{topK} predictions · chunk {selectedChunk + 1}
-              </div>
-              <div className="space-y-2">
-                {result.chunks[selectedChunk].top_species.map((s, i) => (
-                  <SpeciesCard key={s.code} species={s} rank={i + 1} variant="row" />
-                ))}
-              </div>
-            </div>
+            )}
           </motion.div>
         )}
       </AnimatePresence>
+    </div>
+  )
+}
+
+function ChunkPanel({ chunk, isSelected, onSelect }) {
+  return (
+    <div
+      className={`card p-4 transition-all ${
+        isSelected ? 'border-accent-cyan/60 bg-accent-cyan/5' : ''
+      }`}
+    >
+      <button
+        onClick={onSelect}
+        className="w-full flex items-center justify-between mb-3 group"
+      >
+        <div className="flex items-center gap-2 font-mono text-xs">
+          <span className="text-muted-light group-hover:text-accent-cyan transition-colors">
+            chunk {chunk.chunk_idx + 1}
+          </span>
+          <span className="text-muted">·</span>
+          <span className="text-muted-light">
+            {chunk.start_sec}s – {chunk.end_sec}s
+          </span>
+          {isSelected && (
+            <span className="text-accent-cyan text-[10px] ml-1">[spectrogram]</span>
+          )}
+        </div>
+        {chunk.is_bird ? (
+          <span className="label-chip text-accent-lime border-accent-lime/40 inline-flex items-center gap-1">
+            <CheckCircle2 className="w-3 h-3" /> bird
+          </span>
+        ) : (
+          <span className="label-chip text-accent-amber border-accent-amber/40 inline-flex items-center gap-1">
+            <AlertTriangle className="w-3 h-3" /> non-bird audio
+          </span>
+        )}
+      </button>
+
+      {chunk.is_bird ? (
+        <div className="space-y-1.5">
+          {chunk.top_species.map((s, i) => (
+            <SpeciesCard key={s.code} species={s} rank={i + 1} variant="row" />
+          ))}
+        </div>
+      ) : (
+        <div className="rounded-lg border border-accent-amber/30 bg-accent-amber/5 px-3 py-3">
+          <div className="text-xs text-muted-light mb-1">Detected as:</div>
+          <div className="font-display font-semibold text-accent-amber">
+            {chunk.non_bird_label || 'Unknown non-bird sound'}
+          </div>
+          {chunk.non_bird_score != null && (
+            <div className="font-mono text-[11px] text-muted mt-1">
+              AST confidence {chunk.non_bird_score.toFixed(3)}
+              <span className="text-muted-light"> · bird-likeness {chunk.gate_bird_score?.toFixed(3)}</span>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }

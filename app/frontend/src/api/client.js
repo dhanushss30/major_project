@@ -12,7 +12,6 @@ export async function predict(audioFile, opts = {}) {
   const form = new FormData()
   form.append('audio', audioFile)
   form.append('top_k', opts.topK ?? 5)
-  form.append('no_bird_thresh', opts.noBirdThresh ?? 0.10)
   form.append('tta_hop', opts.ttaHop ?? 2.5)
   form.append('noise_preprocess', opts.noisePreprocess ?? true)
   form.append('consistency_boost', opts.consistencyBoost ?? 0.05)

@@ -19,6 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 import config
+from bird_gate import bird_gate
 from inference_service import inference_service
 from species_db import species_db
 from rag_service import rag_service
@@ -46,6 +47,7 @@ async def lifespan(app: FastAPI):
     species_db.initialize()
     rag_service.initialize()
     inference_service.initialize()
+    bird_gate.initialize()
 
     print()
     print("=" * 70)
